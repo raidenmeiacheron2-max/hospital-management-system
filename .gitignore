@@ -1,0 +1,46 @@
+# ===== 依赖与缓存 =====
+node_modules/
+.npm-cache/
+.npm/
+.pnpm-store/
+
+# ===== 构建产物 =====
+dist/
+
+# ===== 本地/受限环境产物（交付用，不入库）=====
+release/
+acl-reports/
+
+# ===== 环境变量（本地覆盖；.env.development/.env.production 只含非敏感配置，可提交）=====
+.env
+.env.local
+.env.*.local
+
+# ===== 日志与临时文件 =====
+*.log
+npm-debug.log*
+debug-*.log
+
+# ===== IDE / 编辑器 =====
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# ===== 操作系统 =====
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# ===== 测试与工具临时产物 =====
+coverage/
+tools/edge-profile/
+tools/edge-test.png
+tools/debug-out.log
+tools/__pycache__/
+tools/ocr/
+
+# ===== 第三方参考素材（版权原因不随仓库发布，仅本地保留）=====
+SpringBoot+Vue医院业务管理系统_*.jpg
+医院管理系统_Astra分阶段开发指导手册.docx
+tools/manual_text.txt

@@ -1,0 +1,301 @@
+// ===== 全局样式与 Element UI 主题覆盖（主蓝 #3F9DF9）=====
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  padding: 0;
+  height: 100%;
+  font-family: $font-family;
+  font-size: 14px;
+  color: $text-main;
+  background: $page-bg;
+  -webkit-font-smoothing: antialiased;
+}
+
+#app {
+  height: 100%;
+}
+
+a {
+  text-decoration: none;
+}
+
+// ---------- Element 主色覆盖 ----------
+.el-button--primary {
+  background-color: $primary;
+  border-color: $primary;
+
+  &:hover,
+  &:focus {
+    background-color: $primary-dark;
+    border-color: $primary-dark;
+  }
+
+  &.is-plain {
+    color: $primary;
+    background: $primary-lighter;
+    border-color: lighten($primary, 22%);
+
+    &:hover {
+      background: $primary;
+      border-color: $primary;
+      color: #fff;
+    }
+  }
+}
+
+.el-button--text {
+  color: $primary;
+
+  &:hover {
+    color: $primary-dark;
+  }
+}
+
+.el-input__inner:focus,
+.el-textarea__inner:focus {
+  border-color: $primary;
+}
+
+.el-select .el-input.is-focus .el-input__inner {
+  border-color: $primary;
+}
+
+.el-checkbox__input.is-checked .el-checkbox__inner,
+.el-checkbox__input.is-indeterminate .el-checkbox__inner {
+  background-color: $primary;
+  border-color: $primary;
+}
+
+.el-checkbox__input.is-checked + .el-checkbox__label {
+  color: $primary;
+}
+
+.el-radio__input.is-checked .el-radio__inner {
+  background: $primary;
+  border-color: $primary;
+}
+
+.el-radio__input.is-checked + .el-radio__label {
+  color: $primary;
+}
+
+.el-switch.is-checked .el-switch__core {
+  background-color: $primary;
+  border-color: $primary;
+}
+
+.el-pagination.is-background .el-pager li:not(.disabled).active {
+  background-color: $primary;
+}
+
+.el-pagination.is-background .el-pager li:not(.disabled):hover {
+  color: $primary;
+}
+
+.el-tabs__item.is-active,
+.el-tabs__item:hover {
+  color: $primary;
+}
+
+.el-tabs__active-bar {
+  background-color: $primary;
+}
+
+.el-link.el-link--primary {
+  color: $primary;
+}
+
+.el-date-table td.today span {
+  color: $primary;
+}
+
+.el-date-table td.available:hover {
+  color: $primary;
+}
+
+.el-date-table td.current:not(.disabled) span {
+  background-color: $primary;
+}
+
+.el-loading-spinner .path {
+  stroke: $primary;
+}
+
+.el-message-box__header {
+  padding: 14px 20px;
+  border-bottom: 1px solid $border-light;
+}
+
+.el-message-box__btns .el-button {
+  min-width: 72px;
+}
+
+.el-dialog {
+  border-radius: $radius-md;
+  overflow: hidden;
+}
+
+.el-dialog__header {
+  padding: 14px 20px;
+  border-bottom: 1px solid $border-light;
+}
+
+.el-dialog__title {
+  font-size: 16px;
+  font-weight: 600;
+  color: $text-main;
+}
+
+.el-dialog__body {
+  padding: 20px;
+}
+
+// ---------- 表格 ----------
+.el-table {
+  th.el-table__cell {
+    background-color: $table-header-bg;
+    color: $text-regular;
+    font-weight: 600;
+    padding: 9px 0;
+  }
+
+  td.el-table__cell {
+    padding: 8px 0;
+  }
+
+  .el-table__empty-block {
+    min-height: 96px;
+  }
+
+  &::before {
+    background-color: $border-color;
+  }
+}
+
+// ---------- 通用页面结构 ----------
+.app-page {
+  background: $page-bg;
+  min-height: 100%;
+}
+
+.panel-card {
+  background: $card-bg;
+  border-radius: $radius-md;
+  box-shadow: $shadow-card;
+  border: 1px solid $border-light;
+  padding: 16px;
+
+  & + .panel-card {
+    margin-top: 12px;
+  }
+}
+
+.search-form {
+  .el-form-item {
+    margin-bottom: 0;
+    margin-right: 12px;
+  }
+
+  .el-input,
+  .el-select {
+    width: 180px;
+  }
+
+  .el-date-editor {
+    width: 240px;
+  }
+}
+
+.toolbar-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+
+  .toolbar-left {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+
+  .toolbar-right {
+    margin-left: auto;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+}
+
+.table-footer {
+  display: flex;
+  justify-content: flex-end;
+  align-items: center;
+  padding-top: 14px;
+}
+
+.panel-title {
+  font-size: 15px;
+  font-weight: 600;
+  color: $text-main;
+  margin: 0 0 14px;
+  display: flex;
+  align-items: center;
+
+  &::before {
+    content: '';
+    width: 3px;
+    height: 14px;
+    border-radius: 2px;
+    background: $primary;
+    margin-right: 8px;
+  }
+}
+
+.operation-links {
+  .el-link {
+    margin-right: 10px;
+    font-size: 13px;
+
+    &:last-child {
+      margin-right: 0;
+    }
+  }
+}
+
+.text-danger {
+  color: $danger;
+}
+
+.text-primary {
+  color: $primary;
+}
+
+.text-muted {
+  color: $text-secondary;
+}
+
+// 窄屏下主要操作不被裁切
+@media (max-width: 900px) {
+  .search-form .el-input,
+  .search-form .el-select {
+    width: 140px;
+  }
+}
+
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #c8ccd4;
+  border-radius: 4px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
