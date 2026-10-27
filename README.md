@@ -140,6 +140,11 @@ tools/             开发辅助（DOCX 提取、截图 OCR、配色分析、九�
 
 如需本地覆盖，复制 `.env.example` 为 `.env.local`（已被 `.gitignore` 忽略，不会提交）。仓库中**不包含** `.env`、API Key、Token、数据库密码或私钥等敏感信息；演示账号密码（`123456`）仅存在于虚构种子数据中。
 
+## 交接与后续开发
+
+- **面向接手方（人或 AI 代理）的完整交接文档：[docs/HANDOVER.md](docs/HANDOVER.md)** —— 架构分层、数据模型与字段、业务状态机、Mock/API 约定、路由与组件、测试体系、扩展步骤（新增实体 7 步）、环境坑与已知限制、验收清单。
+- 九图逐页对照：[docs/checklist.md](docs/checklist.md)；视觉验收方法：[docs/visual-check.md](docs/visual-check.md)。
+
 ## 六、限制与说明
 
 1. **无法直接查看参考原图**：见上文第三节说明；视觉细节以 OCR + 像素配色 + 手册为依据实现，未声称逐像素还原。
