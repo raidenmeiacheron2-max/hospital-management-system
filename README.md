@@ -2,7 +2,9 @@
 
 基于 **Vue 2.7 + Vue CLI 5 + Element UI 2.15 + Vue Router 3 + Vuex 3 + Axios 1.x + ECharts 5 + Mock.js + SCSS** 的纯前端医院业务管理系统演示 SPA。无后端、无数据库、无真实 API；全部患者与业务数据为**虚构演示数据**，变更统一经 Mock 数据层写入浏览器 localStorage，刷新后保留。
 
-> ⚠️ 重要说明：本项目为指定技术栈的教学演示，**不处理真实患者数据、不作为生产医疗系统使用**。登录为演示登录（不保存真实密码）；「记住密码」仅记住账号与勾选状态。纯前端权限/菜单只做界面演示，**不具备真实安全控制能力**。
+在原有业务系统之上，已完成 5 个智能化批次：**业务基础与数据安全基座（B1）→ 分角色工作台与四大业务创新（B2）→ AI 基础设施与安全治理（B3）→ AI 应用（B4）→ 预测分析与运营优化（B5）**。AI 层默认**本地确定性引擎、零外部网络、零密钥**，只做只读分析与建议，**不修改任何业务数据**；每次 AI 调用写入 `aiEvents` 审计，可关闭、可追溯。
+
+> ⚠️ 重要说明：本项目为指定技术栈的教学演示，**不处理真实患者数据、不作为生产医疗系统使用**。登录为演示登录（不保存真实密码）；「记住密码」仅记住账号与勾选状态。纯前端权限/菜单只做界面演示，**不具备真实安全控制能力**；AI 输出为演示建议，不构成诊疗或经营结论。
 
 ---
 
@@ -38,7 +40,8 @@ npm run serve
 npm run build     # 产物在 dist/，publicPath 为 './'，可直接静态打开或 npx serve
 
 # 4. 测试
-npm run test:data   # 数据层测试（纯 Node，40 项断言）
+npm run test:data   # 数据层测试（纯 Node，72 项断言，含 B3 AI 护栏）
+npm run test:ai     # AI 任务测试（B4/B5，49 项）
 npm run test:unit   # Jest 单元测试（同一数据层套件）
 npm run e2e         # 端到端验证（需先 npm run serve，使用系统 Edge/Chrome，见 tests/e2e）
 ```
@@ -62,7 +65,15 @@ npm run e2e         # 端到端验证（需先 npm run serve，使用系统 Edge
 - **患者服务**：患者档案（编号/姓名/电话筛选、过敏史、CRUD）。
 - **门诊管理**：医生排班（日期范围、科室卡片、冲突校验）、门诊挂号（仅可选有排班医生、退号退款、导出）、门诊接诊（大弹窗：主诉/现病史/诊断/处理意见 + 处方明细/医技申请动态增删行、金额自动汇总）、处方查询、医技申请、门诊收费（小票）、处方发药（扣库存）、医技报告。
 - **住院管理**：入院登记（登记占床/入科确认/转科转床释放与占用/取消登记释放床位/导出）、住院医嘱（开立/执行/作废）、出院结算（费用汇总、预交抵扣、结算释放床位）。
-- **系统管理**：用户角色、菜单权限（纯演示）、操作日志、演示数据重置。
+- **系统管理**：用户角色、菜单权限（纯演示）、操作日志、审计中心（只读、前后差异、按对象回放）、演示数据重置。
+
+### 智能化能力（B1–B5）
+
+- **数据安全基座（B1）**：版本化增量迁移（v1→v5，先备份、只增不删、拒绝降级）、结构化审计 `auditEvents`（真实操作人/角色/前后状态，剔除密码）、身份/角色持久化（刷新不丢）、个人待办与规则提醒（低库存/床位占用/待报告/待发药/待执行医嘱/临期/未缴费，**问题解决自动完成，关闭不等于解决**）。
+- **分角色工作台（B2）**：医生/收费员/住院/护士长/管理员登录后菜单与工作台不同；菜单过滤 + 路由守卫 + Mock API 权限校验（演示级纵深）；待办中心、提醒中心；患者 360° 全流程时间线（只读聚合）。
+- **AI 基础设施（B3）**：Provider 抽象（默认本地确定性引擎、外部 LLM 骨架默认禁用）、只读 selectors + 上下文脱敏 + 角色权限收敛、Guardrails G1–G7（无写能力/输出结构校验/免责声明/脱敏/开关/零网络）、`aiEvents` 审计、AI 开关、AI 治理中心。
+- **AI 应用（B4）**：**Ask Astra 助手**（自然语言只读问答：结论 + 数据依据 + 建议入口 + 免责）、**智能报表**（收入结构/科室工作量/医生接诊量/药品消耗/床位周转 + AI 摘要 + CSV 导出）、**病历结构化**（自由文本 → 结构化建议，**不覆盖原文**，人工确认后走原业务校验）、**运营异常分析**（停用床位/低库存/积压/临期/占用率等，含处理入口）。
+- **预测分析（B5）**：次日门诊量、次日床位需求、未来 3 日出院、医嘱/发药积压、挂号爽约风险率（确定性统计口径，含区间/置信度/口径说明/免责），并集成工作台「明日运营预测」面板。
 
 ### 业务联动（数据层规则，均有自动化测试覆盖）
 
@@ -101,49 +112,56 @@ npm run e2e         # 端到端验证（需先 npm run serve，使用系统 Edge
 
 ## 四、数据与重置
 
-- 数据键：localStorage `astra_hospital_db_v1`（版本标记；结构不符自动重新播种）。
-- 重置入口：侧栏 **系统管理 → 演示数据重置**，或顶部用户菜单 → 重置演示数据。
+- 数据键：localStorage `astra_hospital_db_v1`（版本标记；当前 `CURRENT_VERSION=5`，旧版本自动**先备份再逐级增量迁移**，不静默重置）。
+- 重置入口：侧栏 **系统管理 → 演示数据重置**，或顶部用户菜单 → 重置演示数据（重置为最新版种子，含 AI 审计空集合）。
 - 模拟失败：请求头 `x-mock-fail: 1` 时 Mock 层返回 500 且**不落库**（验证失败安全，见 `src/mock/index.js`）。
 
 ## 五、目录结构
 
 ```
 src/
-├─ api/            Axios 接口层
+├─ ai/             AI 服务层（provider/selectors/contextBuilder/guardrails/aiAudit/tasks，B3–B5）
+├─ api/            Axios 接口层（含待办/提醒/审计/工作台/时间线/AI）
 ├─ assets/         静态资源
-├─ components/     StatusTag / Pagination 等通用组件
-├─ config/menu.js  菜单与路由共用配置
+├─ components/     StatusTag / Pagination / AiDisclaimer / AiMetaBar 等通用组件
+├─ config/menu.js  菜单与路由共用配置（含 AI 智能中心）
 ├─ layout/         后台框架（侧栏/顶栏/标签页/主区）
 ├─ mixins/listPage.js  列表页通用逻辑（分页、末页删除回退）
-├─ mock/           seed.js 种子数据 · db.js 数据层(规则+持久化) · index.js Mock.js 拦截
-├─ router/         hash 路由 + 守卫
+├─ mock/           seed.js 种子数据 · db.js 数据层(规则+迁移+持久化) · index.js Mock.js 拦截
+├─ router/         hash 路由 + 登录/RBAC 守卫
 ├─ store/          Vuex（user/app/tabs）
 ├─ styles/         设计令牌 variables.scss + 全局样式
-├─ utils/          request/money/storage/auth/validate/csv/date
-└─ views/          login/dashboard/basic/patients/outpatient/inpatient/system/error
+├─ utils/          request/money/storage/auth/validate/csv/date/perm
+└─ views/          login/dashboard/workbench/ai/basic/patients/outpatient/inpatient/system/error
 tests/
-├─ data/           数据层测试套件（Node 直接运行）
+├─ data/           数据层测试套件（Node 直接运行，72 项）
+├─ ai/             AI 任务测试（run.js + cases/，49 项）
 ├─ unit/           Jest 入口
-└─ e2e/            puppeteer-core 端到端脚本（使用系统 Edge/Chrome）
-tools/             开发辅助（DOCX 提取、截图 OCR、配色分析、九图对照清单 docs/checklist.md）
+└─ e2e/            puppeteer-core 端到端脚本（14 节，使用系统 Edge/Chrome）
+tools/             开发辅助（DOCX 提取、截图 OCR、配色分析、check-vue.js 语法检查等）
 ```
 
 ## 环境变量配置
 
-本项目为纯前端 Mock 演示，**不需要任何密钥**。环境变量只有以下三项（见 `.env.development` / `.env.production`）：
+本项目为纯前端 Mock 演示，**不需要任何密钥**。环境变量如下（见 `.env.development` / `.env.production`）：
 
 | 变量名 | 说明 | 示例/默认值 |
 | --- | --- | --- |
 | `NODE_ENV` | 构建模式，由 Vue CLI 自动读取 | `development` / `production` |
 | `VUE_APP_TITLE` | 浏览器标题（`VUE_APP_` 前缀的变量才会注入客户端） | `医院管理系统` |
 | `VUE_APP_BASE_API` | Mock 请求前缀，与 `src/mock/index.js` 的拦截路径一致 | `/api` |
+| `VUE_APP_AI_ENABLED` | AI 功能总开关（关闭后所有 AI 入口无副作用） | `true` |
+| `VUE_APP_AI_PROVIDER` | AI Provider：`local`（本地确定性引擎）/ `http-llm`（仅骨架，默认禁用） | `local` |
+| `VUE_APP_AI_ENDPOINT` | 仅 `http-llm` 使用；默认空 = 不联网 | 空 |
 
-如需本地覆盖，复制 `.env.example` 为 `.env.local`（已被 `.gitignore` 忽略，不会提交）。仓库中**不包含** `.env`、API Key、Token、数据库密码或私钥等敏感信息；演示账号密码（`123456`）仅存在于虚构种子数据中。
+如需本地覆盖，复制 `.env.example` 为 `.env.local`（已被 `.gitignore` 忽略，不会提交）。仓库中**不包含** `.env`、API Key、Token、数据库密码或私钥等敏感信息；演示账号密码（`123456`）仅存在于虚构种子数据中。**AI 密钥类配置只能放 `.env.local`，不得写入仓库、种子或前端代码。**
 
 ## 交接与后续开发
 
-- **面向接手方（人或 AI 代理）的完整交接文档：[docs/HANDOVER.md](docs/HANDOVER.md)** —— 架构分层、数据模型与字段、业务状态机、Mock/API 约定、路由与组件、测试体系、扩展步骤（新增实体 7 步）、环境坑与已知限制、验收清单。
+- **面向接手方（人或 AI 代理）的完整交接文档：[docs/HANDOVER.md](docs/HANDOVER.md)** —— 架构分层、数据模型与字段、业务状态机、Mock/API 约定、路由与组件、测试体系、扩展步骤（新增实体 7 步 / 新增 AI 任务 6 步）、环境坑与已知限制、验收清单。
+- **B3–B5 最终交付报告：[docs/B3-B5_DELIVERY_REPORT.md](docs/B3-B5_DELIVERY_REPORT.md)** —— 新增功能、架构与安全设计、文件变更、测试与验证结果、验收对照、遗留问题与复现步骤。
 - 九图逐页对照：[docs/checklist.md](docs/checklist.md)；视觉验收方法：[docs/visual-check.md](docs/visual-check.md)。
+- 智能化规划与治理：[docs/INNOVATION_PLAN.md](docs/INNOVATION_PLAN.md)、[docs/IMPLEMENTATION_STATUS.md](docs/IMPLEMENTATION_STATUS.md)、[docs/AI_ARCHITECTURE.md](docs/AI_ARCHITECTURE.md)、[docs/DECISIONS.md](docs/DECISIONS.md)。
 
 ## 六、限制与说明
 
@@ -152,15 +170,18 @@ tools/             开发辅助（DOCX 提取、截图 OCR、配色分析、九�
 3. Mock 延迟 80–260ms 模拟网络；所有数据在浏览器本地。
 4. `npm install` 在受限环境下若无法写全局缓存，使用 `--cache .npm-cache`；依赖安装脚本已用 `--ignore-scripts`（本项目无必需安装脚本，sass 为纯 JS 包）。
 5. 生产构建产物 `dist/` 可用任意静态服务器打开（`publicPath: './'`，hash 路由刷新不白屏）。
+6. **AI 能力为演示级**：默认本地确定性规则引擎（零网络、零密钥），外部 LLM 仅保留骨架（默认禁用、无网络实现）；AI 只读，不修改业务数据；预测/异常阈值为演示口径，不构成诊疗或经营结论。
+7. **AI 开关**：`VUE_APP_AI_ENABLED=false` 或治理中心关闭后，AI 入口返回 503 且无任何副作用（不写审计、不改数据）。
 
 ## 七、测试结果（本机实际执行，Node v24.21.0 / Edge headless）
 
 | 命令 | 结果 |
 | --- | --- |
-| `npm run test:data` | **40/40 通过**（金额整数分、登录、关联规则、排班冲突、挂号/退号/接诊联动、收费/发药/库存、入院占床/转床/取消/结算、分页筛选、首页统计、重置与空结果） |
+| `npm run test:data` | **72/72 通过**（金额整数分、登录、关联规则、排班冲突、挂号/退号/接诊联动、收费/发药/库存、入院占床/转床/取消/结算、分页筛选、首页统计、重置与空结果；B1 迁移/审计/身份/待办提醒；B2 权限/工作台/时间线；B3 AI 护栏 11 项） |
+| `npm run test:ai` | **49/49 通过**（B4 助手 12 + 异常 11 + 报表 9 + 病历结构化 9；B5 预测 8） |
 | `npm run test:unit`（Jest，--runInBand） | **1 套件 / 1 用例通过**（同一数据层套件；Jest 27 在 Node 24 下以进程内模式运行） |
 | `npm run build` | **通过**（约 15s，产物 `dist/`；`parallel:false` 规避受限环境 spawn 限制） |
-| `npm run e2e` | **28/28 通过，控制台零错误** —— 登录守卫/退出、九页截图、筛选空态重置、末页删除回退、排班冲突拦截、挂号→接诊状态联动+刷新持久化、退号禁接诊、入院占床→入科→转床→出院结算释放床位、重置演示数据、375px 窄屏/1024px 宽表滚动/CSV 导出/顶部刷新入口、全部 25 个页面渲染冒烟 + 404 |
+| `npm run e2e` | **48/48 通过，控制台零错误**（修复后复跑；新增 W1/W2/W3 回归 7 项，首次验收 41/41） —— 登录守卫/退出、九页截图、筛选空态重置、末页删除回退、排班冲突拦截（已修复日期敏感缺陷）、挂号→接诊状态联动+刷新持久化、退号禁接诊、入院占床→入科→转床→出院结算释放床位、重置演示数据、375px 窄屏/1024px 宽表滚动/CSV 导出/顶部刷新入口、全部 30 个页面渲染冒烟 + 404、**AI 治理中心自检/审计、助手问答、异常命中、报表合计、预测与 ECharts、工作台预测面板** |
 
 > E2E 需要 headless 浏览器（自动探测系统 Edge/Chrome，CDP 连接）；受限沙箱下浏览器多进程模型无法启动，需以完整权限运行一次（详见 `tests/e2e/run.js` 头注释）。
 

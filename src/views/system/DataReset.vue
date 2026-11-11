@@ -37,7 +37,7 @@ export default {
     return {
       resetting: false,
       storageKey: STORAGE_KEY,
-      version: 1,
+      version: 2,
       storageState: ''
     }
   },

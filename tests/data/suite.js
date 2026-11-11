@@ -3,7 +3,22 @@
 // 可被纯 Node（tests/data/run.js）与 Jest（tests/unit/data.test.js）复用
 // =====================================================================
 const assert = require('assert')
+const fs = require('fs')
+const path = require('path')
 const db = require('../../src/mock/db')
+const ai = require('../../src/ai')
+
+// 递归列出 src/ai 下的 .js 文件（供 G1/G7 静态断言）
+function walkJsFiles(dir) {
+  const out = []
+  if (!fs.existsSync(dir)) return out
+  fs.readdirSync(dir).forEach(function (name) {
+    const full = path.join(dir, name)
+    if (fs.statSync(full).isDirectory()) out.push.apply(out, walkJsFiles(full))
+    else if (/\.js$/.test(name)) out.push(full)
+  })
+  return out
+}
 
 function test(name, fn) {
   try {
@@ -350,6 +365,380 @@ function runAll() {
     const r = db.query('patients', { filters: { name: '不存在的患者xyz' }, page: 1, size: 10 })
     assert.strictEqual(r.total, 0)
     assert.strictEqual(r.list.length, 0)
+  })
+
+  section('数据版本迁移（v1 -> 当前版本 无损）')
+  test('v1 数据升级到当前版本、原有数据零丢失且生成备份', () => {
+    const seed = require('../../src/mock/seed').buildSeed()
+    const v1 = JSON.parse(JSON.stringify(seed))
+    v1.version = 1
+    delete v1.auditEvents
+    delete v1.todos
+    delete v1.reminderAcks
+    delete v1.aiEvents
+    delete v1.counters.auditEvents
+    delete v1.counters.todos
+    delete v1.counters.reminderAcks
+    delete v1.counters.aiEvents
+    // 模拟旧数据：移除 v3 才新增的菜单节点
+    ;(v1.menus || []).forEach((m) => {
+      if (Array.isArray(m.children)) m.children = m.children.filter((c) => ['patient-timeline', 'system-audit'].indexOf(c.code) === -1)
+    })
+    // 模拟旧数据：移除 v4 才新增的 AI 菜单分组
+    v1.menus = (v1.menus || []).filter((m) => m.code !== 'ai')
+    const patientsBefore = v1.patients.length
+    const staffBefore = v1.staff.length
+    const regBefore = v1.registrations.length
+    const store = {}
+    global.localStorage = {
+      getItem: (k) => (Object.prototype.hasOwnProperty.call(store, k) ? store[k] : null),
+      setItem: (k, v) => { store[k] = String(v) },
+      removeItem: (k) => { delete store[k] }
+    }
+    try {
+      store.astra_hospital_db_v1 = JSON.stringify(v1)
+      db.load()
+      assert.strictEqual(db.CURRENT_VERSION, 5)
+      assert.strictEqual(db.all('patients').length, patientsBefore)
+      assert.strictEqual(db.all('staff').length, staffBefore)
+      assert.strictEqual(db.all('registrations').length, regBefore)
+      assert.ok(Array.isArray(db.all('todos')))
+      assert.ok(Array.isArray(db.all('reminderAcks')))
+      assert.ok(Array.isArray(db.all('auditEvents')))
+      assert.ok(db.all('menus').some((m) => m.code === 'system' && (m.children || []).some((c) => c.code === 'system-audit')), '应迁移出审计中心菜单')
+      assert.ok(db.all('menus').some((m) => m.code === 'patient' && (m.children || []).some((c) => c.code === 'patient-timeline')), '应迁移出患者时间线菜单')
+      assert.ok(db.all('menus').some((m) => m.code === 'ai' && (m.children || []).some((c) => c.code === 'ai-center')), '应迁移出 AI 治理中心菜单')
+      assert.ok(db.all('menus').some((m) => m.code === 'ai' && (m.children || []).some((c) => c.code === 'ai-assistant')), '应迁移出 AI 应用菜单')
+      assert.ok(store.astra_hospital_db_v1_backup_v1, '应生成 v1 备份')
+      assert.strictEqual(JSON.parse(store.astra_hospital_db_v1).version, 5)
+    } finally {
+      delete global.localStorage
+      db.resetAll()
+    }
+  })
+
+  section('结构化审计与真实操作人')
+  test('登录后写操作审计记录真实操作人/角色/实体且不含密码', () => {
+    fresh()
+    const lr = db.login('admin', '123456')
+    assert.ok(lr.ok)
+    const before = db.all('auditEvents').length
+    const cr = db.createPatient({ name: '审计测试患者', gender: '男', phone: '13912345678' })
+    assert.ok(cr.ok, cr.error)
+    const list = db.all('auditEvents')
+    assert.strictEqual(list.length, before + 1)
+    const ev = list[0]
+    assert.strictEqual(ev.actorName, '周明远')
+    assert.strictEqual(ev.actorRole, '超级管理员')
+    assert.strictEqual(ev.entityType, 'patients')
+    assert.ok(ev.entityId)
+    db.createStaff({ name: '审计员工', type: '收费人员', loginAccount: 'audituser', phone: '13912340000' })
+    const staffEv = db.all('auditEvents')[0]
+    assert.strictEqual(staffEv.entityType, 'staff')
+    assert.ok(JSON.stringify(staffEv).indexOf('"password"') === -1, '审计不应包含密码字段')
+  })
+
+  section('身份与角色复原')
+  test('profileOf 按 token 复原员工与角色且不含密码', () => {
+    fresh()
+    const lr = db.login('admin', '123456')
+    const p = db.profileOf(lr.data.token)
+    assert.ok(p)
+    assert.strictEqual(p.name, '周明远')
+    assert.strictEqual(p.roleCode, 'SUPER_ADMIN')
+    assert.ok(p.menuCodes.indexOf('*') !== -1)
+    assert.ok(!('password' in p))
+    const dr = db.login('13900000001', '123456')
+    const dp = db.profileOf(dr.data.token)
+    assert.strictEqual(dp.roleCode, 'DOCTOR')
+    assert.ok(dp.menuCodes.indexOf('outpatient') !== -1)
+    assert.ok(dp.menuCodes.indexOf('system') === -1)
+  })
+
+  section('个人待办（含优先级建议）')
+  test('创建/更新/状态/删除待办，优先级建议可用', () => {
+    fresh()
+    const sug = db.suggestTodoPriority({ title: 'x', dueDate: '2026-08-28', module: '收费' })
+    assert.ok(['高', '中', '低'].indexOf(sug.priority) !== -1)
+    assert.ok(sug.reason && sug.reason.length > 0)
+    const c = db.createTodo({ title: '测试待办', module: '门诊管理', dueDate: '2026-08-28' })
+    assert.ok(c.ok, c.error)
+    assert.strictEqual(c.data.prioritySuggested, '高')
+    const u = db.updateTodo(c.data.id, { title: '测试待办改', priorityConfirmed: '中' })
+    assert.ok(u.ok)
+    assert.strictEqual(u.data.title, '测试待办改')
+    const st = db.setTodoStatus(c.data.id, '已完成')
+    assert.ok(st.ok)
+    assert.strictEqual(st.data.status, '已完成')
+    const d = db.deleteTodo(c.data.id)
+    assert.ok(d.ok)
+    assert.ok(!db.find('todos', c.data.id))
+  })
+
+  section('系统提醒规则引擎（解决即自动完成）')
+  test('低库存提醒随库存恢复自动消失，关闭不视为解决', () => {
+    fresh()
+    db.updateMedicine('m10', { stock: 5 })
+    assert.ok(db.computeReminders().some((r) => r.rule === 'lowStock' && r.refId === 'm10'))
+    db.acknowledgeReminder('lowStock:m10')
+    assert.ok(db.computeReminders().some((r) => r.rule === 'lowStock' && r.refId === 'm10'))
+    db.updateMedicine('m10', { stock: 500 })
+    assert.ok(!db.computeReminders().some((r) => r.rule === 'lowStock' && r.refId === 'm10'))
+  })
+  test('种子数据存在待报告/待执行医嘱提醒且摘要可用', () => {
+    fresh()
+    const rules = db.computeReminders().map((r) => r.rule)
+    assert.ok(rules.indexOf('pendingReport') !== -1, '应有待报告提醒')
+    assert.ok(rules.indexOf('pendingOrder') !== -1, '应有待执行医嘱提醒')
+    const sum = db.reminderSummary()
+    assert.ok(sum.total >= 2)
+    assert.ok(sum.byLevel.high + sum.byLevel.medium + sum.byLevel.low === sum.total)
+  })
+
+  section('B2 权限域判断（演示级 RBAC）')
+  test('不同角色可访问的业务域不同', () => {
+    fresh()
+    const admin = db.find('staff', 's0')
+    const doctor = db.find('staff', 's1')
+    const cashier = db.find('staff', 's9')
+    const resident = db.find('staff', 's10')
+    const nurse = db.find('staff', 's11')
+    assert.ok(db.canDomain(admin, 'system'))
+    assert.ok(db.canDomain(admin, 'basic'))
+    assert.ok(db.canDomain(doctor, 'outpatient'))
+    assert.ok(db.canDomain(doctor, 'patient'))
+    assert.ok(!db.canDomain(doctor, 'system'))
+    assert.ok(!db.canDomain(doctor, 'inpatient'))
+    assert.ok(db.canDomain(cashier, 'outpatient'))
+    assert.ok(!db.canDomain(cashier, 'basic'))
+    assert.ok(db.canDomain(resident, 'inpatient'))
+    assert.ok(!db.canDomain(resident, 'outpatient'))
+    assert.ok(db.canDomain(nurse, 'basic'))
+    assert.ok(db.canDomain(nurse, 'inpatient'))
+  })
+  test('canMenu 支持分组与子项', () => {
+    fresh()
+    const doctor = db.find('staff', 's1')
+    assert.ok(db.canMenu(doctor, 'outpatient-visit'))
+    assert.ok(db.canMenu(doctor, 'outpatient-charge'))
+    assert.ok(!db.canMenu(doctor, 'system-role'))
+  })
+
+  section('B2 分角色工作台聚合')
+  test('医生工作台返回本人待接诊数据', () => {
+    fresh()
+    db.login('13900000002', '123456')
+    const staff = db.find('staff', 's2')
+    const wb0 = db.workbenchSummary(db.getCurrentActor())
+    assert.strictEqual(wb0.roleCode, 'DOCTOR')
+    assert.ok(wb0.capabilities.outpatient)
+    assert.ok(!wb0.capabilities.admin)
+    const before = wb0.counts.myPendingRegs
+    db.createRegistration({ patientId: 'p0', departmentId: 'dep1', doctorId: staff.id, date: '2026-08-28', period: '上午' })
+    const wb = db.workbenchSummary(db.getCurrentActor())
+    assert.strictEqual(wb.counts.myPendingRegs, before + 1)
+    assert.ok(wb.queues.myPendingRegs.some((x) => x.patientName === '林雪梅'))
+  })
+  test('收费员工作台返回待收费/待发药/待结算', () => {
+    fresh()
+    db.login('13800001000', '123456')
+    const wb = db.workbenchSummary(db.getCurrentActor())
+    assert.strictEqual(wb.roleCode, 'CASHIER')
+    assert.ok(wb.capabilities.cashier)
+    assert.ok(wb.counts.pendingCharge >= 1)
+    assert.ok(wb.counts.pendingSettle >= 1)
+  })
+  test('管理员工作台含运营统计与库存提醒', () => {
+    fresh()
+    db.login('admin', '123456')
+    const wb = db.workbenchSummary(db.getCurrentActor())
+    assert.ok(wb.capabilities.admin)
+    assert.strictEqual(wb.stats.beds.total, 12)
+    assert.ok(Array.isArray(wb.queues.lowStock))
+  })
+
+  section('B2 患者 360° 时间线')
+  test('时间线聚合真实业务记录且只读、不重复', () => {
+    fresh()
+    const before = JSON.stringify({ r: db.all('registrations').length, v: db.all('visits').length, a: db.all('admissions').length })
+    const r = db.patientTimeline('p3')
+    assert.ok(r.ok, r.error)
+    const cats = r.data.events.map((e) => e.category)
+    assert.ok(cats.indexOf('挂号') !== -1)
+    assert.ok(cats.indexOf('接诊') !== -1)
+    assert.ok(cats.indexOf('入院') !== -1)
+    assert.ok(cats.indexOf('医嘱') !== -1)
+    const ids = r.data.events.map((e) => e.id)
+    assert.strictEqual(ids.length, new Set(ids).size)
+    const after = JSON.stringify({ r: db.all('registrations').length, v: db.all('visits').length, a: db.all('admissions').length })
+    assert.strictEqual(before, after)
+    assert.ok(r.data.progress.total > 0)
+  })
+  test('不存在的患者返回失败', () => {
+    fresh()
+    assert.ok(!db.patientTimeline('not-exist').ok)
+  })
+
+  section('B2 审计只读与待办描述')
+  test('审计无删除接口且记录不含密码', () => {
+    fresh()
+    db.login('admin', '123456')
+    db.createPatient({ name: '审计只读测试', gender: '女', phone: '13912349999' })
+    assert.strictEqual(typeof db.deleteAuditEvent, 'undefined')
+    assert.ok(JSON.stringify(db.all('auditEvents')).indexOf('"password"') === -1)
+  })
+  test('待办描述可创建与更新', () => {
+    fresh()
+    const c = db.createTodo({ title: '带描述待办', description: '初始描述', module: '收费' })
+    assert.ok(c.ok, c.error)
+    assert.strictEqual(c.data.description, '初始描述')
+    const u = db.updateTodo(c.data.id, { description: '更新后的描述' })
+    assert.ok(u.ok)
+    assert.strictEqual(u.data.description, '更新后的描述')
+  })
+
+  section('B3 AI 基础设施（只读 / 脱敏 / 审计 / 开关 / 零网络）')
+  test('任务注册表包含基础设施任务且全部声明只读', () => {
+    fresh()
+    const names = ai.listTasks().map((t) => t.name)
+    ;['system.selftest', 'todo.priority', 'reminder.explain'].forEach((n) => {
+      assert.ok(names.indexOf(n) !== -1, '缺少任务 ' + n)
+    })
+    ai.listTasks().forEach((t) => {
+      assert.strictEqual(t.readOnly, true, '任务必须只读：' + t.name)
+      assert.ok(t.schemaFields > 0, '任务必须声明输出结构：' + t.name)
+    })
+  })
+
+  test('Provider 契约：本地引擎可用且同步，外部 Provider 默认不可用', () => {
+    const list = ai.listProviders()
+    const local = list.find((p) => p.name === 'local-rule-engine')
+    assert.ok(local, '缺少本地引擎')
+    assert.strictEqual(local.kind, 'local')
+    assert.strictEqual(local.sync, true)
+    assert.strictEqual(local.available, true)
+    const http = list.find((p) => p.name === 'http-llm')
+    assert.ok(http, '缺少外部 Provider 骨架')
+    assert.strictEqual(http.available, false, '外部 Provider 默认必须禁用')
+  })
+
+  test('自检任务返回结构合法结果并附免责声明', () => {
+    fresh()
+    const r = ai.runTask('system.selftest', {})
+    assert.ok(r.ok, r.error)
+    assert.strictEqual(r.task, 'system.selftest')
+    assert.strictEqual(r.provider, 'local-rule-engine')
+    assert.strictEqual(typeof r.data.summary, 'string')
+    assert.ok(r.data.summary.length > 0)
+    assert.ok(Array.isArray(r.data.checks) && r.data.checks.length >= 5)
+    assert.ok(r.data.checks.every((c) => c.ok === true))
+    assert.ok(Array.isArray(r.data.disclaimers) && r.data.disclaimers.length >= 1)
+    assert.strictEqual(r.meta.readOnly, true)
+    assert.strictEqual(r.meta.audited, true)
+  })
+
+  test('每次 AI 调用写入 aiEvents 且不含敏感信息', () => {
+    fresh()
+    const before = db.all('aiEvents').length
+    const r = ai.runTask('system.selftest', { password: 'secret', token: 'mock-token-s0', phone: '13912345678', note: '演示输入' })
+    assert.ok(r.ok, r.error)
+    assert.strictEqual(db.all('aiEvents').length, before + 1)
+    const ev = db.all('aiEvents')[0]
+    assert.strictEqual(ev.task, 'system.selftest')
+    assert.strictEqual(ev.provider, 'local-rule-engine')
+    assert.ok(ev.inputSummary.length > 0)
+    const raw = JSON.stringify(ev).toLowerCase()
+    assert.ok(raw.indexOf('password') === -1, '审计不应包含 password 字段名')
+    assert.ok(raw.indexOf('secret') === -1, '审计不应包含密码值')
+    assert.ok(raw.indexOf('mock-token') === -1, '审计不应包含 token 值')
+    assert.ok(raw.indexOf('13912345678') === -1, '审计不应包含手机号')
+  })
+
+  test('AI 开关关闭时无任何副作用（G6）', () => {
+    fresh()
+    const before = db.all('aiEvents').length
+    const old = process.env.VUE_APP_AI_ENABLED
+    process.env.VUE_APP_AI_ENABLED = 'false'
+    try {
+      const r = ai.runTask('system.selftest', {})
+      assert.ok(!r.ok)
+      assert.strictEqual(r.code, 'AI_DISABLED')
+      assert.strictEqual(db.all('aiEvents').length, before, '关闭后不得写入审计或产生副作用')
+    } finally {
+      if (old === undefined) delete process.env.VUE_APP_AI_ENABLED
+      else process.env.VUE_APP_AI_ENABLED = old
+    }
+  })
+
+  test('上下文与选择器脱敏（G5）：不含密码/手机号/token', () => {
+    fresh()
+    const staff = ai.selectors.all('staff')
+    assert.ok(staff.length > 0)
+    const staffRaw = JSON.stringify(staff).toLowerCase()
+    assert.ok(staffRaw.indexOf('"password"') === -1)
+    assert.ok(staffRaw.indexOf('"phone"') === -1)
+    const contextBuilder = require('../../src/ai/contextBuilder')
+    const ctx = contextBuilder.build(ai.getTask('system.selftest'), { password: 'x', token: 'mock-token-s0' }, db.getCurrentActor())
+    const ctxRaw = JSON.stringify(ctx).toLowerCase()
+    assert.ok(ctxRaw.indexOf('"password"') === -1)
+    assert.ok(ctxRaw.indexOf('mock-token') === -1)
+    assert.ok(ctx.note.indexOf('只读') !== -1)
+  })
+
+  test('输出 schema 校验失败时回退"无建议"（G2）', () => {
+    const g = ai.guardrails
+    const bad = g.validateSchema({ answer: 1 }, { answer: 'string', basis: 'array' })
+    assert.strictEqual(bad.ok, false)
+    assert.strictEqual(bad.errors.length, 2)
+    const fb = g.fallbackOutput({ fallback: null }, bad.errors)
+    assert.ok(fb && typeof fb === 'object')
+    assert.ok(typeof fb.note === 'string' && fb.note.length > 0)
+    assert.ok(Array.isArray(fb.disclaimers))
+  })
+
+  test('G1 静态断言：AI 层无业务写函数调用', () => {
+    const g = ai.guardrails
+    const files = walkJsFiles(path.join(__dirname, '../../src/ai'))
+    assert.ok(files.length >= 8, '应扫描到 AI 层源码文件')
+    const hits = []
+    files.forEach((f) => {
+      const src = fs.readFileSync(f, 'utf8')
+      g.scanSource(src, g.FORBIDDEN_WRITE_PATTERNS).forEach((h) => hits.push(path.basename(f) + ':' + h.label))
+    })
+    assert.strictEqual(hits.length, 0, 'AI 层不应具备写能力：' + hits.slice(0, 5).join('；'))
+  })
+
+  test('G7 静态断言：AI 层无网络请求实现', () => {
+    const g = ai.guardrails
+    // guardrails.js 本身定义静态规则文本，故排除；其余 AI 文件不得出现网络调用
+    const files = walkJsFiles(path.join(__dirname, '../../src/ai')).filter((f) => path.basename(f) !== 'guardrails.js')
+    const hits = []
+    files.forEach((f) => {
+      const src = fs.readFileSync(f, 'utf8')
+      g.scanSource(src, g.FORBIDDEN_NETWORK_PATTERNS).forEach((h) => hits.push(path.basename(f) + ':' + h.label))
+    })
+    assert.strictEqual(hits.length, 0, '默认链路不应发起网络请求：' + hits.slice(0, 5).join('；'))
+  })
+
+  test('AI 审计事件统计与采纳标记可用', () => {
+    fresh()
+    const r = ai.runTask('system.selftest', {})
+    assert.ok(r.meta.eventId, '应返回审计事件 id')
+    const m = ai.markAccepted(r.meta.eventId)
+    assert.ok(m.ok, m.error)
+    const st = ai.eventStats()
+    assert.strictEqual(st.total, 1)
+    assert.strictEqual(st.accepted, 1)
+    assert.strictEqual(st.acceptanceRate, 100)
+    assert.strictEqual(st.byTask['system.selftest'], 1)
+  })
+
+  test('未知任务与非法输入安全失败', () => {
+    fresh()
+    const r = ai.runTask('not.exist', {})
+    assert.ok(!r.ok)
+    assert.strictEqual(r.code, 'AI_TASK_NOT_FOUND')
+    assert.strictEqual(db.all('aiEvents').length, 0)
   })
 
   console.log('\n全部数据层测试通过 ✔')

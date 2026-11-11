@@ -27,6 +27,12 @@ service.interceptors.response.use(
         if (window.location.hash.indexOf('#/login') === -1) {
           window.location.hash = '#/login'
         }
+        Message.error(res.msg || '登录状态已失效')
+        return Promise.reject(new Error(res.msg || '登录状态已失效'))
+      }
+      if (res.code === 403) {
+        Message.error(res.msg || '无权限访问（演示级 RBAC）')
+        return Promise.reject(new Error(res.msg || '无权限访问'))
       }
       Message.error(res.msg || '操作失败')
       return Promise.reject(new Error(res.msg || '操作失败'))

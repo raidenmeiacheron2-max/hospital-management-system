@@ -240,6 +240,58 @@ async function nav(page, hash) {
   await sleep(700)
 }
 
+/** 等待页面正文出现指定文本（用于 AI 页面断言） */
+async function waitBodyText(page, text, timeout = 8000) {
+  try {
+    await page.waitForFunction((t) => document.body.innerText.indexOf(t) !== -1, { timeout }, text)
+    return true
+  } catch (e) {
+    return false
+  }
+}
+
+/** 点击页面正文中文本完全匹配的最深层可见元素（用于推荐问题 chips 等非按钮元素） */
+async function clickBodyText(page, text) {
+  const clicked = await page.evaluate((t) => {
+    const els = [...document.querySelectorAll('body *')].filter(
+      (el) => el.textContent.trim() === t && el.offsetParent !== null
+    )
+    if (!els.length) return false
+    els[els.length - 1].click()
+    return true
+  }, text)
+  await sleep(300)
+  return clicked
+}
+
+/**
+ * 日历面板翻页到目标年月（Element UI 日期面板含「上一年/上一月」两个 prev 按钮）。
+ * 修复原「固定回退两个月」的日期敏感缺陷：按面板实际年月动态翻页。
+ */
+async function gotoCalendarMonth(page, targetYear, targetMonth) {
+  for (let i = 0; i < 36; i++) {
+    const cur = await page.evaluate(() => {
+      const labels = [...document.querySelectorAll('.el-picker-panel .el-date-picker__header-label')].filter(
+        (el) => el.offsetParent !== null
+      )
+      const year = labels[0] ? parseInt(labels[0].textContent, 10) : NaN
+      const mm = labels[1] ? labels[1].textContent.match(/(\d+)/) : null
+      return { year: year, month: mm ? parseInt(mm[1], 10) : NaN }
+    })
+    if (!cur.year || !cur.month) throw new Error('无法读取日历年月')
+    const diff = (cur.year - targetYear) * 12 + (cur.month - targetMonth)
+    if (diff === 0) return
+    await page.evaluate((dir) => {
+      const prev = [...document.querySelectorAll('.el-picker-panel button.el-date-picker__prev-btn')]
+      const next = [...document.querySelectorAll('.el-picker-panel button.el-date-picker__next-btn')]
+      if (dir > 0 && prev[1]) prev[1].click()
+      else if (dir < 0 && next[1]) next[1].click()
+    }, diff > 0 ? 1 : -1)
+    await sleep(280)
+  }
+  throw new Error('日历年月切换失败')
+}
+
 async function gotoPage2(page) {
   await page.evaluate(() => {
     const btns = [...document.querySelectorAll('.el-pager li')]
@@ -383,7 +435,7 @@ async function main() {
     if (!opened) throw new Error('排班按钮未找到')
     await sleep(600)
     await step(page, 'pick-doctor', () => pickSelect(page, '请选择医生', '周明远'))
-    // 日历面板默认系统当前月份（2026-10），先真实点击打开面板，再退回 2026-08 选 28 日
+    // 日历面板默认打开系统当前月份；动态翻页到种子排班所在的 2026-08 再选 28 日
     await step(page, 'open-calendar', async () => {
       const dateHandle = await page.evaluateHandle(() => {
         const inputs = [...document.querySelectorAll('.el-dialog input')].filter(
@@ -394,16 +446,7 @@ async function main() {
       await dateHandle.asElement().click()
     })
     await sleep(800)
-    await step(page, 'prev-month', async () => {
-      for (let i = 0; i < 2; i++) {
-        await page.evaluate(() => {
-          const btns = [...document.querySelectorAll('.el-picker-panel button.el-date-picker__prev-btn')]
-          // 第 2 个 prev 按钮是「上一月」
-          if (btns[1]) btns[1].click()
-        })
-        await sleep(400)
-      }
-    })
+    await step(page, 'goto-2026-08', () => gotoCalendarMonth(page, 2026, 8))
     await step(page, 'pick-day', async () => {
       const picked = await page.evaluate(() => {
         const cells = [...document.querySelectorAll('.el-date-table td.available')]
@@ -692,7 +735,7 @@ async function main() {
   }])
 
   // ---------- 12 全部页面渲染冒烟 + 404 ----------
-  sections.push(['12. 全部 25 个页面渲染冒烟 + 404', async () => {
+  sections.push(['12. 全部 30 个页面渲染冒烟 + 404', async () => {
     const paths = [
       '/dashboard',
       '/basic/departments',
@@ -718,7 +761,12 @@ async function main() {
       '/system/roles',
       '/system/menus',
       '/system/logs',
-      '/system/reset'
+      '/system/reset',
+      '/ai/center',
+      '/ai/assistant',
+      '/ai/reports',
+      '/ai/anomaly',
+      '/ai/forecast'
     ]
     const bad = []
     for (const p of paths) {
@@ -747,6 +795,181 @@ async function main() {
     })
     if (nf === '404') ok('未知路由正确显示 404 页面')
     else fail('未知路由 404 处理', new Error('got: ' + nf))
+  }])
+
+  // ---------- 13 AI 智能中心与 AI 应用（B3/B4/B5） ----------
+  sections.push(['13. AI 智能中心与 AI 应用（B3/B4/B5）', async () => {
+    // 13.1 AI 治理中心：自检 + 审计
+    await nav(page, '/ai/center')
+    await sleep(1200)
+    await clickByText(page, '运行自检')
+    await sleep(1600)
+    if (await waitBodyText(page, '自检通过', 8000)) ok('AI 治理中心自检通过（Provider/只读/脱敏/零网络）')
+    else fail('AI 治理中心自检通过')
+    if (await waitBodyText(page, 'system.selftest', 6000)) ok('AI 调用写入 aiEvents 审计事件')
+    else fail('AI 调用写入 aiEvents 审计事件')
+    await shot(page, '11-ai-center')
+
+    // 13.2 Ask Astra 助手：推荐问题 → 结论 + 数据依据 + 元信息
+    await nav(page, '/ai/assistant')
+    await sleep(1000)
+    if (!(await clickBodyText(page, '今天门诊量多少？'))) throw new Error('推荐问题未找到')
+    await sleep(1800)
+    if (await waitBodyText(page, '数据依据', 8000)) ok('Ask Astra 返回结论 + 数据依据')
+    else fail('Ask Astra 返回结论 + 数据依据')
+    if (await waitBodyText(page, '本地确定性引擎', 5000)) ok('AI 结果展示 provider/置信度/只读元信息')
+    else fail('AI 结果展示 provider/置信度/只读元信息')
+    await shot(page, '12-ai-assistant')
+
+    // 13.3 运营异常分析：命中种子已知异常
+    await nav(page, '/ai/anomaly')
+    await sleep(1800)
+    if (await waitBodyText(page, '床位停用', 8000)) ok('运营异常分析命中种子已知异常（b12 检修床位）')
+    else fail('运营异常分析命中种子已知异常')
+    if (await waitBodyText(page, '检查报告积压', 6000)) ok('运营异常分析命中待报告积压')
+    else fail('运营异常分析命中待报告积压')
+    await shot(page, '13-ai-anomaly')
+
+    // 13.4 智能报表：可复算数值与 AI 摘要
+    await nav(page, '/ai/reports')
+    await sleep(2200)
+    if (await waitBodyText(page, '收入结构报表', 8000)) ok('智能报表渲染收入结构')
+    else fail('智能报表渲染收入结构')
+    if (await waitBodyText(page, '¥1021.10', 6000)) ok('报表合计与种子数据一致（¥1021.10）')
+    else fail('报表合计与种子数据一致')
+    if (await waitBodyText(page, 'AI 摘要', 5000)) ok('智能报表附 AI 摘要与要点')
+    else fail('智能报表附 AI 摘要与要点')
+    await shot(page, '14-ai-reports')
+
+    // 13.5 预测分析：5 项预测 + 区间 + ECharts
+    await nav(page, '/ai/forecast')
+    await sleep(3000)
+    if (await waitBodyText(page, '次日门诊量', 8000)) ok('预测分析渲染次日门诊量等 5 项预测')
+    else fail('预测分析渲染 5 项预测')
+    if (await waitBodyText(page, '预测区间', 6000)) ok('预测输出包含区间与口径说明')
+    else fail('预测输出包含区间与口径说明')
+    const hasChart = await page.evaluate(() => document.querySelectorAll('canvas').length > 0)
+    if (hasChart) ok('预测趋势图（ECharts）渲染成功')
+    else fail('预测趋势图（ECharts）渲染成功')
+    await shot(page, '15-ai-forecast')
+
+    // 13.6 工作台集成：明日运营预测面板
+    await nav(page, '/dashboard')
+    await sleep(2500)
+    if (await waitBodyText(page, '明日运营预测', 8000)) ok('工作台集成「明日运营预测」面板')
+    else fail('工作台集成「明日运营预测」面板')
+  }])
+
+  // ---------- 14 缺陷修复回归（W1/W2/W3） ----------
+  sections.push(['14. 缺陷修复回归（W1 医技申请分页 / W2 医技项目 undefined / W3 结构化反馈）', async () => {
+    // W1：医技申请列表在分页前过滤「有医技项目」，历史待报告接诊可见且可出具报告
+    await nav(page, '/outpatient/exam-applies')
+    await sleep(1600)
+    const totalText = await page.evaluate(() => {
+      const m = document.body.innerText.match(/共\s*(\d+)\s*条/)
+      return m ? m[1] : ''
+    })
+    if (totalText === '9') ok('W1 医技申请列表按「有医技项目」服务端过滤后共 9 条（含历史待报告）')
+    else fail('W1 医技申请列表总数', new Error('共 ' + totalText + ' 条，期望 9'))
+
+    const pendingInfo = await page.evaluate(() => {
+      const rows = [...document.querySelectorAll('.el-table__body-wrapper tbody tr')]
+      const pending = rows.filter((r) => r.innerText.indexOf('待报告') !== -1)
+      const actionable = pending.filter((r) => [...r.querySelectorAll('.el-link--inner')].some((s) => s.textContent.trim() === '出具报告'))
+      return { pending: pending.length, actionable: actionable.length, codes: pending.map((r) => (r.innerText.match(/VIS\d+/) || [''])[0]) }
+    })
+    if (pendingInfo.pending >= 2 && pendingInfo.actionable >= 2) {
+      ok('W1 历史待报告接诊（' + pendingInfo.codes.join(',') + '）可见且可出具报告')
+    } else {
+      fail('W1 历史待报告接诊可见且可出具报告', new Error(JSON.stringify(pendingInfo)))
+    }
+
+    // 出具一份报告，验证提醒闭环：待报告提醒由 2 条降为 1 条
+    await page.evaluate(() => {
+      const rows = [...document.querySelectorAll('.el-table__body-wrapper tbody tr')]
+      const row = rows.find((r) => r.innerText.indexOf('待报告') !== -1 && [...r.querySelectorAll('.el-link--inner')].some((s) => s.textContent.trim() === '出具报告'))
+      const link = row ? [...row.querySelectorAll('.el-link--inner')].find((s) => s.textContent.trim() === '出具报告') : null
+      if (link) link.click()
+    })
+    await sleep(900)
+    await pickSelect(page, '请选择项目', '（1）')
+    await typeInto(page, '请输入检查所见与诊断意见', '验收回归测试：检查所见未见明显异常。')
+    await clickByText(page, '确 定', '.el-dialog__footer button')
+    await sleep(1200)
+    if (await waitMessage(page, '报告已出具', 6000)) ok('W1 历史待报告接诊可正常出具报告')
+    else fail('W1 历史待报告接诊可正常出具报告')
+
+    await nav(page, '/workbench/reminders')
+    await sleep(1200)
+    if (await waitBodyText(page, '共 1 条接诊存在待出报告', 6000)) ok('W1 提醒对应业务闭环：待报告提醒由 2 条降为 1 条')
+    else fail('W1 提醒对应业务闭环')
+
+    // W2：接诊弹窗医技项目下拉不再显示 undefined
+    await nav(page, '/outpatient/visits')
+    await sleep(1400)
+    await page.evaluate(() => {
+      const row = document.querySelector('.el-table__body-wrapper tbody tr')
+      const link = row ? [...row.querySelectorAll('.el-link--inner')].find((s) => s.textContent.trim() === '修改') : null
+      if (link) link.click()
+    })
+    await sleep(1200)
+    await page.evaluate(() => {
+      const dlg = [...document.querySelectorAll('.el-dialog')].find((d) => d.offsetParent !== null)
+      const input = dlg ? [...dlg.querySelectorAll('.el-select input')].find((i) => (i.getAttribute('placeholder') || '').indexOf('请选择项目') !== -1) : null
+      if (input) input.click()
+    })
+    await sleep(800)
+    const examLabels = await page.evaluate(() =>
+      [...document.querySelectorAll('.el-select-dropdown__item')].filter((el) => el.offsetParent !== null).map((el) => el.textContent.trim())
+    )
+    const hasUndefined = examLabels.some((t) => t.indexOf('undefined') !== -1)
+    const hasCategory = examLabels.some((t) => t.indexOf('（检验）') !== -1 || t.indexOf('（检查）') !== -1)
+    if (examLabels.length && !hasUndefined && hasCategory) ok('W2 医技项目下拉标签正常（含分类、无 undefined）')
+    else fail('W2 医技项目下拉标签', new Error('labels=' + examLabels.slice(0, 4).join('|')))
+    await page.keyboard.press('Escape')
+    await sleep(400)
+
+    // W3：病历结构化「应用建议」给出明确持久反馈；标记采纳状态明确；全程不写库
+    await page.evaluate(() => {
+      const dlg = [...document.querySelectorAll('.el-dialog')].find((d) => d.offsetParent !== null)
+      const b = dlg ? [...dlg.querySelectorAll('button')].find((x) => x.innerText.trim() === '解析当前文本') : null
+      if (b) b.click()
+    })
+    await sleep(1600)
+    await page.evaluate(() => {
+      const dlg = [...document.querySelectorAll('.el-dialog')].find((d) => d.offsetParent !== null)
+      const b = dlg ? [...dlg.querySelectorAll('button')].find((x) => x.innerText.trim().indexOf('应用建议') === 0) : null
+      if (b) b.click()
+    })
+    await sleep(800)
+    const hintText = await page.evaluate(() => {
+      const dlg = [...document.querySelectorAll('.el-dialog')].find((d) => d.offsetParent !== null)
+      const alerts = dlg ? [...dlg.querySelectorAll('.el-alert__title')].map((x) => x.textContent.trim()) : []
+      return alerts.join(' | ')
+    })
+    if (hintText.indexOf('已包含全部') !== -1) ok('W3 应用建议给出明确反馈（诊断已包含关键词，未做修改）')
+    else fail('W3 应用建议明确反馈', new Error('hint=' + hintText))
+
+    await page.evaluate(() => {
+      const dlg = [...document.querySelectorAll('.el-dialog')].find((d) => d.offsetParent !== null)
+      const b = dlg ? [...dlg.querySelectorAll('button')].find((x) => x.innerText.trim() === '标记采纳') : null
+      if (b) b.click()
+    })
+    await sleep(1000)
+    const accepted = await page.evaluate(() => {
+      const dlg = [...document.querySelectorAll('.el-dialog')].find((d) => d.offsetParent !== null)
+      return dlg ? dlg.innerText.indexOf('已标记采纳') !== -1 : false
+    })
+    if (accepted) ok('W3 标记采纳后按钮与提示状态明确（已标记采纳）')
+    else fail('W3 标记采纳状态反馈')
+
+    // 关闭弹窗（不保存，确保未修改业务数据）
+    await page.evaluate(() => {
+      const dlg = [...document.querySelectorAll('.el-dialog')].find((d) => d.offsetParent !== null)
+      const b = dlg ? [...dlg.querySelectorAll('button')].find((x) => x.innerText.replace(/\s/g, '') === '取消') : null
+      if (b) b.click()
+    })
+    await sleep(600)
   }])
 
   try {

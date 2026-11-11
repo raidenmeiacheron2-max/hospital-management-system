@@ -1,4 +1,4 @@
-import { apiLogin, apiLogout } from '@/api'
+import { apiLogin, apiLogout, apiGetProfile } from '@/api'
 import { getToken, setToken, clearToken } from '@/utils/auth'
 
 const state = {
@@ -37,6 +37,17 @@ const actions = {
     clearToken()
     commit('SET_TOKEN', '')
     commit('SET_STAFF', null)
+  },
+  // 刷新后按 token 复原员工/角色（B1：身份持久化）
+  async restore({ commit, state }) {
+    if (!state.token) return null
+    try {
+      const staff = await apiGetProfile()
+      commit('SET_STAFF', staff)
+      return staff
+    } catch (e) {
+      return null
+    }
   }
 }
 

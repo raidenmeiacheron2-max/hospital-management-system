@@ -106,7 +106,8 @@ export default {
   },
   methods: {
     buildParams() {
-      const p = { page: this.query.page, size: this.query.size }
+      // hasExams=1 由 Mock 层在分页前过滤，避免“先分页后过滤”导致历史待报告接诊不可见
+      const p = { page: this.query.page, size: this.query.size, hasExams: 1 }
       Object.keys(this.filters).forEach((k) => {
         if (this.filters[k] !== '') p[k] = this.filters[k]
       })
@@ -116,8 +117,8 @@ export default {
       this.loading = true
       try {
         const res = await apiListVisits(this.buildParams())
-        this.list = res.list.filter((v) => (v.exams || []).length > 0)
-        this.total = this.list.length
+        this.list = res.list
+        this.total = res.total
       } finally {
         this.loading = false
       }

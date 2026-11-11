@@ -8,6 +8,7 @@
     "build": "vue-cli-service build",
     "test:unit": "node node_modules/jest/bin/jest.js --runInBand tests/unit",
     "test:data": "node tests/data/run.js",
+    "test:ai": "node tests/ai/run.js",
     "e2e": "node tests/e2e/run.js"
   },
   "dependencies": {

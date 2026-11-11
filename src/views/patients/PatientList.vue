@@ -49,9 +49,10 @@
             <StatusTag :label="row.status" />
           </template>
         </el-table-column>
-        <el-table-column label="操作" width="150" fixed="right">
+        <el-table-column label="操作" width="200" fixed="right">
           <template slot-scope="{ row }">
             <div class="operation-links">
+              <el-link type="primary" @click="goTimeline(row)">360°</el-link>
               <el-link type="primary" @click="openDialog(row)">修改</el-link>
               <el-link type="danger" @click="removeRow(row)">删除</el-link>
             </div>
@@ -179,8 +180,10 @@ export default {
         }
       })
     },
-    removeRow(row) {
-      this.$confirm(`确定删除患者「${row.name}」吗？删除后不可恢复。`, '删除确认', { type: 'warning' })
+    goTimeline(row) {
+      this.$router.push('/patients/timeline?patientId=' + row.id)
+    },
+    removeRow(row) {      this.$confirm(`确定删除患者「${row.name}」吗？删除后不可恢复。`, '删除确认', { type: 'warning' })
         .then(async () => {
           await apiDeletePatient(row.id)
           this.$message.success('删除成功')

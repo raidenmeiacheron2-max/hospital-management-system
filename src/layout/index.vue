@@ -21,7 +21,7 @@
           :collapse-transition="false"
           router
         >
-          <template v-for="item in menuTree">
+          <template v-for="item in filteredMenuTree">
             <el-menu-item v-if="!item.children" :key="item.code" :index="item.path">
               <i :class="item.icon"></i>
               <span slot="title">{{ item.title }}</span>
@@ -63,6 +63,7 @@
             <span class="user-area">
               <span class="avatar">{{ avatarText }}</span>
               <span class="user-name">{{ staffName }}</span>
+              <span v-if="staffRole" class="user-role">{{ staffRole }}</span>
               <i class="el-icon-arrow-down"></i>
             </span>
             <el-dropdown-menu slot="dropdown">
@@ -85,6 +86,7 @@
 
 <script>
 import { menuTree, flattenMenus } from '@/config/menu'
+import { filterMenuTree } from '@/utils/perm'
 import TagsView from './components/TagsView.vue'
 
 export default {
@@ -108,6 +110,12 @@ export default {
     },
     staffName() {
       return (this.staff && this.staff.name) || '系统管理员'
+    },
+    staffRole() {
+      return (this.staff && this.staff.role) || ''
+    },
+    filteredMenuTree() {
+      return filterMenuTree(menuTree, this.staff)
     },
     avatarText() {
       return (this.staffName || '管').slice(0, 1)
@@ -306,6 +314,16 @@ export default {
   .user-name {
     color: $text-main;
     font-size: 14px;
+    margin-right: 4px;
+  }
+
+  .user-role {
+    font-size: 11px;
+    color: $text-secondary;
+    background: $page-bg;
+    border: 1px solid $border-color;
+    border-radius: 8px;
+    padding: 1px 6px;
     margin-right: 4px;
   }
 

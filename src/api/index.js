@@ -1,9 +1,11 @@
 // ===== API 层：按域分组 =====
 import request from '@/utils/request'
+import { getToken } from '@/utils/auth'
 
 // ---------- auth ----------
 export const apiLogin = (data) => request.post('/auth/login', data)
 export const apiLogout = () => request.post('/auth/logout')
+export const apiGetProfile = () => request.get('/auth/profile', { params: { token: getToken() } })
 
 // ---------- dashboard ----------
 export const apiStats = () => request.get('/dashboard/stats')
@@ -100,6 +102,36 @@ export const apiDeleteRole = (id) => request.delete(`/roles/${id}`)
 export const apiSaveRoleMenus = (id, menuCodes) => request.put(`/roles/${id}/menus`, { menuCodes })
 export const apiListMenus = () => request.get('/menus')
 export const apiResetDemo = () => request.post('/system/reset')
+
+// ---------- 待办（B1）----------
+export const apiListTodos = (params) => request.get('/todos', { params })
+export const apiCreateTodo = (data) => request.post('/todos', data)
+export const apiUpdateTodo = (id, data) => request.put(`/todos/${id}`, data)
+export const apiDeleteTodo = (id) => request.delete(`/todos/${id}`)
+export const apiSetTodoStatus = (id, status) => request.put(`/todos/${id}/status`, { status })
+export const apiSuggestTodoPriority = (data) => request.post('/todos/suggest-priority', data)
+
+// ---------- 系统提醒（B1）----------
+export const apiListReminders = () => request.get('/reminders')
+export const apiAckReminder = (id) => request.post(`/reminders/${id}/ack`)
+export const apiSnoozeReminder = (id, until) => request.post(`/reminders/${id}/snooze`, { until })
+
+// ---------- 审计事件（B1）----------
+export const apiListAuditEvents = (params) => request.get('/audit-events', { params })
+
+// ---------- 分角色工作台 / 患者时间线（B2）----------
+export const apiWorkbenchSummary = () => request.get('/workbench/summary')
+export const apiPatientTimeline = (patientId) => request.get(`/timeline/patient/${patientId}`)
+
+// ---------- AI 服务层（B3）----------
+export const apiAiSettings = () => request.get('/ai/settings')
+export const apiAiSaveSettings = (data) => request.put('/ai/settings', data)
+export const apiAiTasks = () => request.get('/ai/tasks')
+export const apiAiProviders = () => request.get('/ai/providers')
+export const apiAiStats = () => request.get('/ai/stats')
+export const apiAiRun = (task, input) => request.post('/ai/run', { task, input })
+export const apiAiEvents = (params) => request.get('/ai/events', { params })
+export const apiAiAcceptEvent = (id) => request.put(`/ai/events/${id}/accept`)
 
 // ---------- 选项字典 ----------
 export const apiOptions = (name) => request.get(`/options/${name}`)

@@ -272,12 +272,40 @@ function buildSeed() {
     { id: 'lg8', operator: '系统管理员', action: '登录系统', target: '登录', time: '2026-08-22 08:00', ip: '192.168.1.10' }
   ]
 
+  // B1 新增：结构化审计（由旧 logs 回填作为演示历史）
+  const auditEvents = logs.map((l, i) => ({
+    id: 'aud' + (i + 1),
+    time: l.time || '',
+    actorStaffId: '',
+    actorName: l.operator || '系统',
+    actorRole: '',
+    action: l.action || '',
+    entityType: 'legacy',
+    entityId: '',
+    entityCode: '',
+    summary: l.target || '',
+    before: null,
+    after: null,
+    refs: {},
+    result: 'ok',
+    ip: l.ip || ''
+  }))
+
+  // B1 新增：个人待办（演示）
+  const todos = [
+    { id: 'td1', ownerStaffId: 's0', ownerRole: '超级管理员', title: '核对本周门诊收费日报', description: '对照收费记录与日报，确认无遗漏', module: '收费', dueDate: '2026-08-28', prioritySuggested: '高', priorityConfirmed: '高', aiReason: '今日到期；关联高风险业务模块', status: '未完成', source: 'user', createdAt: '2026-08-28 08:40', doneAt: '' },
+    { id: 'td2', ownerStaffId: 's1', ownerRole: '门诊医生', title: '跟进待出报告的检查结果', description: '查看待出报告的医技申请', module: '门诊管理', dueDate: '2026-08-29', prioritySuggested: '中', priorityConfirmed: '', aiReason: '2 天内到期；关联高风险业务模块', status: '未完成', source: 'user', createdAt: '2026-08-28 08:50', doneAt: '' }
+  ]
+  // B1 新增：提醒确认记录（关闭/稍后，不代表问题解决）与 AI 事件（占位）
+  const reminderAcks = []
+  const aiEvents = []
+
   const roles = [
     { id: 'role1', name: '超级管理员', code: 'SUPER_ADMIN', description: '拥有全部菜单权限', menuCodes: ['*'] },
-    { id: 'role2', name: '门诊医生', code: 'DOCTOR', description: '门诊接诊、排班、处方', menuCodes: ['home', 'patient', 'outpatient'] },
-    { id: 'role3', name: '挂号收费员', code: 'CASHIER', description: '挂号与收费', menuCodes: ['home', 'patient', 'outpatient-registration', 'outpatient-charge'] },
-    { id: 'role4', name: '住院医生', code: 'RESIDENT', description: '住院医嘱与结算', menuCodes: ['home', 'patient', 'inpatient'] },
-    { id: 'role5', name: '护士长', code: 'HEAD_NURSE', description: '床位与医嘱执行', menuCodes: ['home', 'basic-bed', 'basic-ward', 'inpatient'] }
+    { id: 'role2', name: '门诊医生', code: 'DOCTOR', description: '门诊接诊、排班、处方', menuCodes: ['home', 'patient', 'outpatient', 'ai-assistant', 'ai-forecast'] },
+    { id: 'role3', name: '挂号收费员', code: 'CASHIER', description: '挂号与收费', menuCodes: ['home', 'patient', 'outpatient-registration', 'outpatient-charge', 'ai-assistant', 'ai-forecast'] },
+    { id: 'role4', name: '住院医生', code: 'RESIDENT', description: '住院医嘱与结算', menuCodes: ['home', 'patient', 'inpatient', 'ai-assistant', 'ai-forecast'] },
+    { id: 'role5', name: '护士长', code: 'HEAD_NURSE', description: '床位与医嘱执行', menuCodes: ['home', 'basic-bed', 'basic-ward', 'inpatient', 'ai-assistant', 'ai-anomaly', 'ai-forecast'] }
   ]
 
   const menus = [
@@ -294,7 +322,10 @@ function buildSeed() {
         { id: 'm-stock', code: 'basic-stock', name: '批次库存', type: 'menu', children: [] }
       ]
     },
-    { id: 'm-patient', code: 'patient', name: '患者服务', type: 'group', children: [{ id: 'm-patient-list', code: 'patient-list', name: '患者档案', type: 'menu', children: [] }] },
+    { id: 'm-patient', code: 'patient', name: '患者服务', type: 'group', children: [
+      { id: 'm-patient-list', code: 'patient-list', name: '患者档案', type: 'menu', children: [] },
+      { id: 'm-patient-timeline', code: 'patient-timeline', name: '患者360°时间线', type: 'menu', children: [] }
+    ] },
     {
       id: 'm-out', code: 'outpatient', name: '门诊管理', type: 'group', children: [
         { id: 'm-out-sch', code: 'outpatient-schedule', name: '医生排班', type: 'menu', children: [] },
@@ -319,13 +350,23 @@ function buildSeed() {
         { id: 'm-sys-role', code: 'system-role', name: '用户角色', type: 'menu', children: [] },
         { id: 'm-sys-menu', code: 'system-menu', name: '菜单权限', type: 'menu', children: [] },
         { id: 'm-sys-log', code: 'system-log', name: '操作日志', type: 'menu', children: [] },
+        { id: 'm-sys-audit', code: 'system-audit', name: '审计中心', type: 'menu', children: [] },
         { id: 'm-sys-reset', code: 'system-reset', name: '演示数据重置', type: 'menu', children: [] }
+      ]
+    },
+    {
+      id: 'm-ai', code: 'ai', name: 'AI 智能中心', type: 'group', children: [
+        { id: 'm-ai-assistant', code: 'ai-assistant', name: 'Ask Astra 助手', type: 'menu', children: [] },
+        { id: 'm-ai-report', code: 'ai-report', name: '智能报表', type: 'menu', children: [] },
+        { id: 'm-ai-anomaly', code: 'ai-anomaly', name: '运营异常分析', type: 'menu', children: [] },
+        { id: 'm-ai-forecast', code: 'ai-forecast', name: '预测分析', type: 'menu', children: [] },
+        { id: 'm-ai-center', code: 'ai-center', name: 'AI 治理中心', type: 'menu', children: [] }
       ]
     }
   ]
 
   return {
-    version: 1,
+    version: 5,
     demoToday,
     savedAt: '2026-08-28 09:00:00',
     departments,
@@ -345,6 +386,10 @@ function buildSeed() {
     orders,
     settlements,
     logs,
+    auditEvents,
+    todos,
+    reminderAcks,
+    aiEvents,
     roles,
     menus,
     counters: {
@@ -377,7 +422,11 @@ function buildSeed() {
       medicines: 10,
       examItems: 8,
       feeItems: 6,
-      stocks: 10
+      stocks: 10,
+      auditEvents: auditEvents.length,
+      todos: todos.length,
+      reminderAcks: 0,
+      aiEvents: 0
     }
   }
 }

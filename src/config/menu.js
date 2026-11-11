@@ -20,7 +20,10 @@ export const menuTree = [
     code: 'patient',
     title: '患者服务',
     icon: 'el-icon-s-custom',
-    children: [{ code: 'patient-list', title: '患者档案', path: '/patients', icon: 'el-icon-notebook-2' }]
+    children: [
+      { code: 'patient-list', title: '患者档案', path: '/patients', icon: 'el-icon-notebook-2' },
+      { code: 'patient-timeline', title: '患者360°时间线', path: '/patients/timeline', icon: 'el-icon-time' }
+    ]
   },
   {
     code: 'outpatient',
@@ -55,7 +58,20 @@ export const menuTree = [
       { code: 'system-role', title: '用户角色', path: '/system/roles', icon: 'el-icon-s-custom' },
       { code: 'system-menu', title: '菜单权限', path: '/system/menus', icon: 'el-icon-menu' },
       { code: 'system-log', title: '操作日志', path: '/system/logs', icon: 'el-icon-document-copy' },
+      { code: 'system-audit', title: '审计中心', path: '/system/audit', icon: 'el-icon-finished' },
       { code: 'system-reset', title: '演示数据重置', path: '/system/reset', icon: 'el-icon-refresh-left' }
+    ]
+  },
+  {
+    code: 'ai',
+    title: 'AI 智能中心',
+    icon: 'el-icon-magic-stick',
+    children: [
+      { code: 'ai-assistant', title: 'Ask Astra 助手', path: '/ai/assistant', icon: 'el-icon-chat-dot-round' },
+      { code: 'ai-report', title: '智能报表', path: '/ai/reports', icon: 'el-icon-data-analysis' },
+      { code: 'ai-anomaly', title: '运营异常分析', path: '/ai/anomaly', icon: 'el-icon-warning-outline' },
+      { code: 'ai-forecast', title: '预测分析', path: '/ai/forecast', icon: 'el-icon-trend-charts' },
+      { code: 'ai-center', title: 'AI 治理中心', path: '/ai/center', icon: 'el-icon-cpu' }
     ]
   }
 ]

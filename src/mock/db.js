@@ -8,9 +8,13 @@
 const { buildSeed } = require('./seed')
 
 const STORAGE_KEY = 'astra_hospital_db_v1'
-const CURRENT_VERSION = 1
+// 数据版本：每次结构变更 +1，并提供对应增量迁移；禁止直接重播种覆盖用户数据
+const CURRENT_VERSION = 5
+const BACKUP_KEY_PREFIX = STORAGE_KEY + '_backup_v'
 
 let state = null
+// 当前操作人（结构化审计记录真实操作人/角色）
+let currentActor = null
 
 function safeGet() {
   try {
@@ -47,24 +51,185 @@ function ok(data) {
   return { ok: true, data }
 }
 
+// 备份原始数据串（迁移/兜底前调用），不覆盖已有同名备份
+function backupRaw(raw, fromVersion) {
+  try {
+    if (typeof localStorage !== 'undefined' && raw) {
+      const key = BACKUP_KEY_PREFIX + fromVersion
+      if (!localStorage.getItem(key)) localStorage.setItem(key, raw)
+    }
+  } catch (e) {
+    /* noop */
+  }
+}
+
+// 增量迁移表：MIGRATIONS[v] 把版本 v 升级到 v+1（只增不删、补默认值、回填派生）
+const MIGRATIONS = {
+  1: function migrate1to2(s) {
+    // v1 -> v2：新增 审计事件 / 待办 / 提醒确认 / AI 事件 与对应计数器
+    if (!Array.isArray(s.auditEvents)) {
+      // 用旧 logs 回填结构化审计（尽力保留历史，标记 legacy）
+      s.auditEvents = (Array.isArray(s.logs) ? s.logs : []).map(function (l, i) {
+        return {
+          id: 'aud' + (i + 1),
+          time: l.time || '',
+          actorStaffId: '',
+          actorName: l.operator || '系统',
+          actorRole: '',
+          action: l.action || '',
+          entityType: 'legacy',
+          entityId: '',
+          entityCode: '',
+          summary: l.target || '',
+          before: null,
+          after: null,
+          refs: {},
+          result: 'ok',
+          ip: l.ip || ''
+        }
+      })
+    }
+    if (!Array.isArray(s.todos)) s.todos = []
+    if (!Array.isArray(s.reminderAcks)) s.reminderAcks = []
+    if (!Array.isArray(s.aiEvents)) s.aiEvents = []
+    s.counters = s.counters || {}
+    if (s.counters.auditEvents === undefined) s.counters.auditEvents = (s.auditEvents || []).length
+    if (s.counters.todos === undefined) s.counters.todos = 0
+    if (s.counters.reminderAcks === undefined) s.counters.reminderAcks = 0
+    if (s.counters.aiEvents === undefined) s.counters.aiEvents = 0
+    s.version = 2
+    return s
+  },
+  2: function migrate2to3(s) {
+    // v2 -> v3：合并新增菜单节点（患者360°时间线、审计中心）；补待办描述字段
+    function ensureMenu(groupCode, node) {
+      const g = (Array.isArray(s.menus) ? s.menus : []).find(function (m) { return m.code === groupCode })
+      if (!g) return
+      g.children = g.children || []
+      if (!g.children.some(function (c) { return c.code === node.code })) g.children.push(node)
+    }
+    ensureMenu('patient', { id: 'm-patient-timeline', code: 'patient-timeline', name: '患者360°时间线', type: 'menu', children: [] })
+    ensureMenu('system', { id: 'm-sys-audit', code: 'system-audit', name: '审计中心', type: 'menu', children: [] })
+    if (Array.isArray(s.todos)) {
+      s.todos.forEach(function (t) { if (t.description === undefined) t.description = '' })
+    }
+    s.version = 3
+    return s
+  },
+  3: function migrate3to4(s) {
+    // v3 -> v4：新增「AI 智能中心」菜单分组与 AI 治理中心节点；确保 aiEvents 集合存在
+    if (!Array.isArray(s.menus)) s.menus = []
+    if (!s.menus.some(function (m) { return m.code === 'ai' })) {
+      s.menus.push({
+        id: 'm-ai',
+        code: 'ai',
+        name: 'AI 智能中心',
+        type: 'group',
+        children: [{ id: 'm-ai-center', code: 'ai-center', name: 'AI 治理中心', type: 'menu', children: [] }]
+      })
+    } else {
+      const g = s.menus.find(function (m) { return m.code === 'ai' })
+      g.children = Array.isArray(g.children) ? g.children : []
+      if (!g.children.some(function (c) { return c.code === 'ai-center' })) {
+        g.children.push({ id: 'm-ai-center', code: 'ai-center', name: 'AI 治理中心', type: 'menu', children: [] })
+      }
+    }
+    if (!Array.isArray(s.aiEvents)) s.aiEvents = []
+    s.counters = s.counters || {}
+    if (s.counters.aiEvents === undefined) s.counters.aiEvents = s.aiEvents.length
+    s.version = 4
+    return s
+  },
+  4: function migrate4to5(s) {
+    // v4 -> v5：新增 AI 应用菜单（助手/智能报表/异常分析/预测分析）并按角色授权
+    const nodes = [
+      { id: 'm-ai-assistant', code: 'ai-assistant', name: 'Ask Astra 助手', type: 'menu', children: [] },
+      { id: 'm-ai-report', code: 'ai-report', name: '智能报表', type: 'menu', children: [] },
+      { id: 'm-ai-anomaly', code: 'ai-anomaly', name: '运营异常分析', type: 'menu', children: [] },
+      { id: 'm-ai-forecast', code: 'ai-forecast', name: '预测分析', type: 'menu', children: [] }
+    ]
+    if (!Array.isArray(s.menus)) s.menus = []
+    let g = s.menus.find(function (m) { return m.code === 'ai' })
+    if (!g) {
+      g = { id: 'm-ai', code: 'ai', name: 'AI 智能中心', type: 'group', children: [] }
+      s.menus.push(g)
+    }
+    g.children = Array.isArray(g.children) ? g.children : []
+    nodes.forEach(function (n) {
+      if (!g.children.some(function (c) { return c.code === n.code })) g.children.push(n)
+    })
+    function grant(roleCode, codes) {
+      const role = (Array.isArray(s.roles) ? s.roles : []).find(function (r) { return r.code === roleCode })
+      if (!role) return
+      role.menuCodes = Array.isArray(role.menuCodes) ? role.menuCodes : []
+      codes.forEach(function (c) {
+        if (role.menuCodes.indexOf(c) === -1) role.menuCodes.push(c)
+      })
+    }
+    grant('DOCTOR', ['ai-assistant', 'ai-forecast'])
+    grant('CASHIER', ['ai-assistant', 'ai-forecast'])
+    grant('RESIDENT', ['ai-assistant', 'ai-forecast'])
+    grant('HEAD_NURSE', ['ai-assistant', 'ai-anomaly', 'ai-forecast'])
+    s.version = 5
+    return s
+  }
+}
+
+const REQUIRED_ARRAYS = ['departments', 'staff', 'patients', 'registrations']
+
+function isValidState(s) {
+  return !!s && typeof s === 'object' && REQUIRED_ARRAYS.every(function (k) { return Array.isArray(s[k]) })
+}
+
+function migrateToCurrent(parsed, raw) {
+  let s = parsed
+  let v = Number(s.version) || 0
+  if (v > CURRENT_VERSION) {
+    // 未来更高版本：拒绝降级，备份后续数据保持不被覆盖
+    backupRaw(raw, v)
+    if (typeof console !== 'undefined') console.warn('[db] 检测到更高版本 v' + v + ' > 当前 ' + CURRENT_VERSION + '，已备份且不覆盖。')
+    return null
+  }
+  if (v < CURRENT_VERSION) {
+    backupRaw(raw, v)
+    const startV = v
+    while (v < CURRENT_VERSION) {
+      const fn = MIGRATIONS[v]
+      if (typeof fn !== 'function') { v = CURRENT_VERSION; break }
+      s = fn(s) || s
+      v += 1
+      s.version = v
+    }
+    s.migrationLog = (Array.isArray(s.migrationLog) ? s.migrationLog : []).concat({ from: startV, to: CURRENT_VERSION, at: now() })
+    s.migratedAt = now()
+  }
+  return s
+}
+
 function load() {
   const raw = safeGet()
   if (raw) {
     try {
       const parsed = JSON.parse(raw)
-      if (
-        parsed &&
-        parsed.version === CURRENT_VERSION &&
-        Array.isArray(parsed.departments) &&
-        Array.isArray(parsed.staff) &&
-        Array.isArray(parsed.patients) &&
-        Array.isArray(parsed.registrations)
-      ) {
-        state = parsed
+      if (isValidState(parsed)) {
+        if (parsed.version === CURRENT_VERSION) {
+          state = parsed
+          return state
+        }
+        const migrated = migrateToCurrent(parsed, raw)
+        if (migrated) {
+          state = migrated
+          persist()
+          return state
+        }
+        // 更高版本：内存退回种子但不写回，避免覆盖较新数据
+        state = buildSeed()
         return state
       }
+      // 结构损坏：先备份再兜底播种
+      backupRaw(raw, (parsed && parsed.version) || 'corrupt')
     } catch (e) {
-      /* fallthrough to reseed */
+      backupRaw(raw, 'unparsable')
     }
   }
   state = buildSeed()
@@ -80,6 +245,76 @@ function persist() {
 function requireState() {
   if (!state) load()
   return state
+}
+
+// ---------- 操作人 / 结构化审计 ----------
+function setCurrentActor(actor) {
+  currentActor = actor ? { id: actor.id || '', name: actor.name || '', role: actor.role || '', code: actor.code || '' } : null
+}
+function getCurrentActor() {
+  return currentActor
+}
+function setActorByToken(token) {
+  if (!token) return
+  const m = String(token).match(/^mock-token-(.+)$/)
+  if (!m) return
+  const staff = all('staff').find(function (s) { return s.id === m[1] })
+  if (staff) setCurrentActor({ id: staff.id, name: staff.name, role: staff.role, code: staff.code })
+}
+function actorInfo(actor) {
+  let a = actor
+  if (!a) a = currentActor
+  if (!a) return { actorStaffId: '', actorName: '系统', actorRole: '' }
+  if (typeof a === 'string') return { actorStaffId: '', actorName: a, actorRole: '' }
+  return { actorStaffId: a.id || '', actorName: a.name || '系统', actorRole: a.role || '' }
+}
+function cloneSans(d, omit) {
+  if (d === null || typeof d !== 'object') return d
+  const o = Array.isArray(d) ? [] : {}
+  Object.keys(d).forEach(function (k) {
+    if (omit && omit.indexOf(k) !== -1) return
+    o[k] = d[k]
+  })
+  return o
+}
+function summarizeEntity(data) {
+  if (!data || typeof data !== 'object') return null
+  const s = cloneSans(data, ['password', 'token'])
+  if (Array.isArray(s)) return { count: s.length }
+  return s
+}
+function nextSeq(name) {
+  const s = requireState()
+  const n = (s.counters[name] || 0) + 1
+  s.counters[name] = n
+  return n
+}
+function recordAudit(actor, action, meta) {
+  requireState()
+  meta = meta || {}
+  if (!Array.isArray(state.auditEvents)) state.auditEvents = []
+  if (!state.counters) state.counters = {}
+  const info = actorInfo(actor)
+  const ev = {
+    id: 'aud' + nextSeq('auditEvents'),
+    time: now(),
+    actorStaffId: info.actorStaffId,
+    actorName: info.actorName,
+    actorRole: info.actorRole,
+    action: action || '',
+    entityType: meta.entityType || '',
+    entityId: meta.entityId || '',
+    entityCode: meta.entityCode || '',
+    summary: meta.summary || '',
+    before: meta.before === undefined ? null : meta.before,
+    after: meta.after === undefined ? null : meta.after,
+    refs: meta.refs || {},
+    result: meta.result || 'ok',
+    ip: '192.168.1.10'
+  }
+  state.auditEvents.unshift(ev)
+  if (state.auditEvents.length > 2000) state.auditEvents = state.auditEvents.slice(0, 2000)
+  return ev
 }
 
 // ---------- 基础查询 ----------
@@ -237,8 +472,10 @@ function login(account, password) {
   if (staff.password !== password) return fail('密码错误')
   staff.lastLoginAt = now()
   persist()
+  setCurrentActor({ id: staff.id, name: staff.name, role: staff.role, code: staff.code })
   addLog(staff.name, '登录系统', '登录')
-  return ok({ token: 'mock-token-' + staff.id, staff: stripPassword(staff) })
+  const perm = permissionsOf(staff)
+  return ok({ token: 'mock-token-' + staff.id, staff: Object.assign(stripPassword(staff), { roleCode: perm.roleCode, menuCodes: perm.menuCodes }) })
 }
 
 function stripPassword(staff) {
@@ -1448,6 +1685,463 @@ function stats() {
 }
 
 // =====================================================================
+// 身份 / 角色（登录后按 token 复原，刷新不丢角色）
+// =====================================================================
+function permissionsOf(staff) {
+  if (!staff) return { roleCode: '', menuCodes: [] }
+  const role = all('roles').find(function (r) { return r.name === staff.role }) || all('roles').find(function (r) { return r.code === staff.role })
+  return { roleCode: role ? role.code : '', menuCodes: role ? (role.menuCodes || []).slice() : [] }
+}
+
+function profileOf(token) {
+  const m = String(token || '').match(/^mock-token-(.+)$/)
+  if (!m) return null
+  const staff = find('staff', m[1])
+  if (!staff) return null
+  const perm = permissionsOf(staff)
+  return Object.assign(stripPassword(staff), { roleCode: perm.roleCode, menuCodes: perm.menuCodes })
+}
+
+// =====================================================================
+// 个人待办（优先级建议为本地规则占位，B3 起可改接 AI 服务）
+// =====================================================================
+function suggestTodoPriority(input) {
+  const p = input || {}
+  const due = p.dueDate || ''
+  const today = (state && state.demoToday) ? state.demoToday : now().slice(0, 10)
+  let score = 0
+  const reasons = []
+  if (due) {
+    const diff = Math.round((new Date(due + 'T00:00:00') - new Date(today + 'T00:00:00')) / 86400000)
+    if (diff < 0) { score += 3; reasons.push('已逾期') }
+    else if (diff === 0) { score += 2; reasons.push('今日到期') }
+    else if (diff <= 2) { score += 1; reasons.push(diff + ' 天内到期') }
+  } else {
+    reasons.push('未设置截止时间')
+  }
+  const mod = p.module || ''
+  if (['住院管理', '门诊管理', '收费', '收费项目'].indexOf(mod) !== -1) { score += 1; reasons.push('关联高风险业务模块') }
+  const priority = score >= 3 ? '高' : score >= 1 ? '中' : '低'
+  return { priority: priority, reason: reasons.join('；') || '常规事务' }
+}
+
+function createTodo(input) {
+  requireState()
+  const p = input || {}
+  if (!p.title || !String(p.title).trim()) return fail('待办标题不能为空')
+  const sug = suggestTodoPriority(p)
+  const actor = currentActor || {}
+  const row = {
+    id: 'td' + nextSeq('todos'),
+    ownerStaffId: p.ownerStaffId || actor.id || '',
+    ownerRole: p.ownerRole || actor.role || '',
+    title: String(p.title).trim(),
+    description: p.description || '',
+    module: p.module || '',
+    dueDate: p.dueDate || '',
+    prioritySuggested: sug.priority,
+    priorityConfirmed: p.priorityConfirmed || '',
+    aiReason: sug.reason,
+    status: '未完成',
+    source: p.source === 'system' ? 'system' : 'user',
+    createdAt: now(),
+    doneAt: ''
+  }
+  add('todos', row)
+  recordAudit(currentActor, '新增待办', { entityType: 'todo', entityId: row.id, entityCode: row.id, summary: '待办 ' + row.title, after: summarizeEntity(row) })
+  persist()
+  return ok(row)
+}
+
+function updateTodo(id, patch) {
+  requireState()
+  const row = find('todos', id)
+  if (!row) return fail('待办不存在')
+  const p = patch || {}
+  if (p.title !== undefined && !String(p.title).trim()) return fail('待办标题不能为空')
+  const before = summarizeEntity(row)
+  Object.keys(p).forEach(function (k) {
+    if (['title', 'description', 'module', 'dueDate', 'priorityConfirmed', 'status'].indexOf(k) !== -1 && p[k] !== undefined) row[k] = p[k]
+  })
+  if (p.title !== undefined) row.title = String(row.title).trim()
+  if (row.status === '已完成' && !row.doneAt) row.doneAt = now()
+  recordAudit(currentActor, '修改待办', { entityType: 'todo', entityId: row.id, entityCode: row.id, summary: '待办 ' + row.title, before: before, after: summarizeEntity(row) })
+  persist()
+  return ok(row)
+}
+
+function setTodoStatus(id, status) {
+  return updateTodo(id, { status: status === '已完成' ? '已完成' : '未完成' })
+}
+
+function deleteTodo(id) {
+  requireState()
+  const row = find('todos', id)
+  if (!row) return fail('待办不存在')
+  state.todos = all('todos').filter(function (x) { return x.id !== id })
+  recordAudit(currentActor, '删除待办', { entityType: 'todo', entityId: id, entityCode: id, summary: '待办 ' + row.title, before: summarizeEntity(row) })
+  persist()
+  return ok({ id: id })
+}
+
+// =====================================================================
+// 系统提醒（规则实时计算：问题解决即自动完成，不能仅靠关闭）
+// =====================================================================
+const REMINDER_RULES = {
+  LOW_STOCK: 50,
+  BED_OCCUPANCY: 80,
+  STOCK_EXPIRY_DAYS: 30
+}
+
+function daysBetween(a, b) {
+  return Math.round((new Date(a + 'T00:00:00') - new Date(b + 'T00:00:00')) / 86400000)
+}
+
+function computeReminders() {
+  requireState()
+  const out = []
+  const today = state.demoToday || now().slice(0, 10)
+  all('medicines').forEach(function (m) {
+    if (m.status === 1 && Number(m.stock) < REMINDER_RULES.LOW_STOCK) {
+      out.push({ id: 'lowStock:' + m.id, rule: 'lowStock', level: 'high', title: '药品库存偏低', detail: m.name + ' 当前库存 ' + m.stock + '，低于阈值 ' + REMINDER_RULES.LOW_STOCK, refType: 'medicine', refId: m.id, link: '/basic/medicines' })
+    }
+  })
+  const beds = all('beds')
+  const totalBeds = beds.length
+  const occ = beds.filter(function (b) { return b.status === '占用' }).length
+  const pct = totalBeds ? Math.round((occ / totalBeds) * 100) : 0
+  if (pct > REMINDER_RULES.BED_OCCUPANCY) {
+    out.push({ id: 'bedOccupancy:all', rule: 'bedOccupancy', level: 'high', title: '床位占用率过高', detail: '当前占用率 ' + pct + '%，超过阈值 ' + REMINDER_RULES.BED_OCCUPANCY + '%', refType: 'bed', refId: '', link: '/basic/beds' })
+  }
+  const pendingReport = all('visits').filter(function (v) { return (v.exams || []).length > 0 && v.reportStatus !== '已出报告' })
+  if (pendingReport.length) out.push({ id: 'pendingReport:all', rule: 'pendingReport', level: 'medium', title: '检查报告待处理', detail: '共 ' + pendingReport.length + ' 条接诊存在待出报告', refType: 'visit', refId: '', link: '/outpatient/reports', count: pendingReport.length })
+  const pendingDispense = all('visits').filter(function (v) { return v.chargeStatus === '已收费' && v.dispenseStatus === '未发药' && (v.prescriptions || []).length > 0 })
+  if (pendingDispense.length) out.push({ id: 'pendingDispense:all', rule: 'pendingDispense', level: 'medium', title: '处方待发药', detail: '共 ' + pendingDispense.length + ' 张处方已收费未发药', refType: 'visit', refId: '', link: '/outpatient/dispenses', count: pendingDispense.length })
+  const pendingOrders = all('orders').filter(function (o) { return o.status === '未执行' })
+  if (pendingOrders.length) out.push({ id: 'pendingOrder:all', rule: 'pendingOrder', level: 'medium', title: '住院医嘱待执行', detail: '共 ' + pendingOrders.length + ' 条医嘱未执行', refType: 'order', refId: '', link: '/inpatient/orders', count: pendingOrders.length })
+  all('stocks').forEach(function (st) {
+    const d = daysBetween(st.expiry, today)
+    if (d >= 0 && d <= REMINDER_RULES.STOCK_EXPIRY_DAYS) {
+      out.push({ id: 'expiring:' + st.id, rule: 'stockExpiring', level: 'medium', title: '药品批次临近有效期', detail: '批号 ' + st.batchNo + ' 距有效期 ' + d + ' 天', refType: 'stock', refId: st.id, link: '/basic/stocks' })
+    }
+  })
+  const unpaid = all('registrations').filter(function (r) { return r.regStatus === '待分诊' && r.payStatus === '未缴费' })
+  if (unpaid.length) out.push({ id: 'unpaidReg:all', rule: 'unpaidRegistration', level: 'low', title: '挂号未缴费', detail: '共 ' + unpaid.length + ' 条待分诊挂号未缴费', refType: 'registration', refId: '', link: '/outpatient/registrations', count: unpaid.length })
+  return out
+}
+
+function reminderSummary() {
+  requireState()
+  const items = computeReminders()
+  const ackMap = {}
+  all('reminderAcks').forEach(function (a) { ackMap[a.id] = a })
+  const merged = items.map(function (it) {
+    return Object.assign({}, it, {
+      acknowledged: !!ackMap[it.id],
+      snoozeUntil: ackMap[it.id] ? ackMap[it.id].snoozeUntil || '' : '',
+      ackAt: ackMap[it.id] ? ackMap[it.id].acknowledgedAt || '' : ''
+    })
+  })
+  const byLevel = { high: 0, medium: 0, low: 0 }
+  merged.forEach(function (m) { if (byLevel[m.level] !== undefined) byLevel[m.level] += 1 })
+  return { items: merged, total: merged.length, byLevel: byLevel, rules: REMINDER_RULES, generatedAt: now() }
+}
+
+function acknowledgeReminder(id) {
+  requireState()
+  if (!Array.isArray(state.reminderAcks)) state.reminderAcks = []
+  const exist = state.reminderAcks.find(function (a) { return a.id === id })
+  if (exist) {
+    exist.acknowledgedAt = now()
+    exist.ackBy = currentActor ? currentActor.id : ''
+  } else {
+    state.reminderAcks.push({ id: id, acknowledgedAt: now(), ackBy: currentActor ? currentActor.id : '', snoozeUntil: '' })
+  }
+  persist()
+  return ok({ id: id, acknowledged: true })
+}
+
+function snoozeReminder(id, until) {
+  requireState()
+  if (!Array.isArray(state.reminderAcks)) state.reminderAcks = []
+  const exist = state.reminderAcks.find(function (a) { return a.id === id })
+  if (exist) { exist.snoozeUntil = until || '' } else { state.reminderAcks.push({ id: id, acknowledgedAt: now(), ackBy: currentActor ? currentActor.id : '', snoozeUntil: until || '' }) }
+  persist()
+  return ok({ id: id, snoozeUntil: until || '' })
+}
+
+// 审计事件查询（供 B2 回放/时间线复用）
+function queryAudit(opts) {
+  return query('auditEvents', opts)
+}
+
+// =====================================================================
+// B3：AI 审计事件（aiEvents，append-only 只读审计集合）
+// - 由 AI 编排层 aiAudit 通过 recordAiEvent() 写入；业务层只读展示
+// - 仅记录摘要，不记录完整敏感原文/密码/token
+// - AI 层唯一允许写入的集合；业务数据写函数对 AI 层不可用（G1）
+// =====================================================================
+function recordAiEvent(ev) {
+  requireState()
+  const e = ev || {}
+  if (!Array.isArray(state.aiEvents)) state.aiEvents = []
+  if (!state.counters) state.counters = {}
+  const row = {
+    id: 'ai' + nextSeq('aiEvents'),
+    time: now(),
+    actorStaffId: e.actorStaffId || '',
+    actorName: e.actorName || '系统',
+    actorRole: e.actorRole || '',
+    task: e.task || '',
+    provider: e.provider || '',
+    inputSummary: String(e.inputSummary || '').slice(0, 300),
+    outputSummary: String(e.outputSummary || '').slice(0, 400),
+    confidence: typeof e.confidence === 'number' ? e.confidence : 0,
+    latencyMs: Number(e.latencyMs) || 0,
+    accepted: !!e.accepted,
+    acceptedAt: '',
+    error: String(e.error || '').slice(0, 300)
+  }
+  state.aiEvents.unshift(row)
+  if (state.aiEvents.length > 1000) state.aiEvents = state.aiEvents.slice(0, 1000)
+  persist()
+  return ok(row)
+}
+
+function queryAiEvents(opts) {
+  const o = opts || {}
+  const filters = {}
+  if (o.task) filters.task = o.task
+  if (o.provider) filters.provider = o.provider
+  if (o.actorStaffId) filters.actorStaffId = o.actorStaffId
+  if (o.accepted !== undefined && o.accepted !== '' && o.accepted !== null) filters.accepted = !!o.accepted
+  if (o.keyword) {
+    const kw = String(o.keyword).toLowerCase()
+    filters.keyword = {
+      fn: function (row) {
+        return (String(row.inputSummary || '') + ' ' + String(row.outputSummary || '') + ' ' + String(row.task || '')).toLowerCase().indexOf(kw) !== -1
+      }
+    }
+  }
+  return query('aiEvents', { filters: filters, page: o.page, size: o.size })
+}
+
+function markAiEventAccepted(id) {
+  requireState()
+  const row = find('aiEvents', id)
+  if (!row) return fail('AI 事件不存在')
+  row.accepted = true
+  row.acceptedAt = now()
+  persist()
+  return ok(row)
+}
+
+function aiEventStats() {
+  requireState()
+  const list = all('aiEvents')
+  const byTask = {}
+  const byProvider = {}
+  let accepted = 0
+  let errors = 0
+  list.forEach(function (e) {
+    byTask[e.task] = (byTask[e.task] || 0) + 1
+    byProvider[e.provider] = (byProvider[e.provider] || 0) + 1
+    if (e.accepted) accepted += 1
+    if (e.error) errors += 1
+  })
+  return {
+    total: list.length,
+    accepted: accepted,
+    acceptanceRate: list.length ? Math.round((accepted / list.length) * 100) : 0,
+    errors: errors,
+    byTask: byTask,
+    byProvider: byProvider,
+    lastAt: list.length ? list[0].time : ''
+  }
+}
+
+// =====================================================================
+// B2：权限域判断（演示级 RBAC，前端菜单/路由 + Mock API 共用）
+// =====================================================================
+function actorMenuCodes(actor) {
+  if (!actor) return []
+  if (actor.id) {
+    const staff = find('staff', actor.id)
+    if (staff) return permissionsOf(staff).menuCodes || []
+  }
+  if (actor.role) {
+    const role = all('roles').find(function (r) { return r.name === actor.role || r.code === actor.role })
+    if (role) return role.menuCodes || []
+  }
+  return []
+}
+
+function canDomain(actor, domain) {
+  const codes = actorMenuCodes(actor)
+  if (!codes.length) return false
+  if (codes.indexOf('*') !== -1) return true
+  if (codes.indexOf(domain) !== -1) return true
+  return codes.some(function (c) { return c.indexOf(domain + '-') === 0 })
+}
+
+function canMenu(actor, code) {
+  const codes = actorMenuCodes(actor)
+  if (!codes.length) return false
+  if (codes.indexOf('*') !== -1) return true
+  if (codes.indexOf(code) !== -1) return true
+  const group = String(code).split('-')[0]
+  return codes.indexOf(group) !== -1
+}
+
+// =====================================================================
+// B2：分角色工作台聚合（只读，基于真实业务数据）
+// =====================================================================
+function workbenchSummary(actor) {
+  requireState()
+  const a = actor || currentActor
+  const staff = a && a.id ? find('staff', a.id) : null
+  const perm = staff ? permissionsOf(staff) : { roleCode: '', menuCodes: [] }
+  const isAdmin = perm.roleCode === 'SUPER_ADMIN' || (perm.menuCodes || []).indexOf('*') !== -1
+  const canOut = isAdmin || canDomain(a, 'outpatient')
+  const canIn = isAdmin || canDomain(a, 'inpatient')
+  const canBasic = isAdmin || canDomain(a, 'basic')
+  const s = stats()
+  const pmap = byIdMap('patients')
+  const wmap = byIdMap('wards')
+  const bmap = byIdMap('beds')
+  const dmap = byIdMap('departments')
+  const smap = byIdMap('staff')
+  const LIMIT = 30
+  function pname(id) { return (pmap[id] || {}).name || '—' }
+  function dname(id) { return (dmap[id] || {}).name || '—' }
+  function regBrief(r) { return { id: r.id, code: r.code, patientId: r.patientId, patientName: pname(r.patientId), date: r.date, period: r.period, regStatus: r.regStatus, departmentName: dname(r.departmentId), doctorName: (smap[r.doctorId] || {}).name || '—' } }
+  function visitBrief(v) { return { id: v.id, code: v.code, patientId: v.patientId, patientName: pname(v.patientId), date: v.date, visitStatus: v.visitStatus, reportStatus: v.reportStatus, chargeStatus: v.chargeStatus, dispenseStatus: v.dispenseStatus, departmentName: dname(v.departmentId) } }
+  function admBrief(x) { return { id: x.id, code: x.code, patientId: x.patientId, patientName: pname(x.patientId), status: x.status, wardName: (wmap[x.wardId] || {}).name || '—', bedCode: (bmap[x.bedId] || {}).code || '—', departmentName: dname(x.departmentId) } }
+  function orderBrief(o) { const adm = find('admissions', o.admissionId) || {}; return { id: o.id, name: o.name, qty: o.qty, status: o.status, admissionId: o.admissionId, admissionCode: adm.code || '—', patientId: adm.patientId || '', patientName: pname(adm.patientId) } }
+  function medBrief(m) { return { id: m.id, code: m.code, name: m.name, stock: m.stock, unit: m.unit } }
+  function take(arr) { return arr.slice(0, LIMIT) }
+
+  const myRegs = staff ? all('registrations').filter(function (r) { return r.doctorId === staff.id && r.regStatus === '待分诊' }) : []
+  const myReports = staff ? all('visits').filter(function (v) { return v.doctorId === staff.id && (v.exams || []).length > 0 && v.reportStatus !== '已出报告' }) : []
+  const pendingCharge = all('visits').filter(function (v) { return v.chargeStatus === '未收费' && ((v.prescriptions || []).length + (v.exams || []).length) > 0 })
+  const pendingDispense = all('visits').filter(function (v) { return v.chargeStatus === '已收费' && v.dispenseStatus === '未发药' && (v.prescriptions || []).length > 0 })
+  const pendingSettle = all('admissions').filter(function (x) { return x.status === '待结算' })
+  const pendingOrders = all('orders').filter(function (o) { return o.status === '未执行' })
+  const pendingAdm = all('admissions').filter(function (x) { return x.status === '待入科' })
+  const lowStock = all('medicines').filter(function (m) { return m.status === 1 && Number(m.stock) < REMINDER_RULES.LOW_STOCK })
+
+  return {
+    roleCode: perm.roleCode,
+    roleName: staff ? staff.role : '',
+    staffName: staff ? staff.name : '',
+    staffId: staff ? staff.id : '',
+    menuCodes: perm.menuCodes,
+    capabilities: { admin: isAdmin, outpatient: canOut, inpatient: canIn, basic: canBasic, cashier: (perm.menuCodes || []).indexOf('outpatient-charge') !== -1 },
+    stats: s,
+    today: state.demoToday,
+    queues: {
+      myPendingRegs: take(myRegs).map(regBrief),
+      myPendingReports: take(myReports).map(visitBrief),
+      pendingCharge: take(pendingCharge).map(visitBrief),
+      pendingDispense: take(pendingDispense).map(visitBrief),
+      pendingSettle: take(pendingSettle).map(admBrief),
+      pendingOrders: take(pendingOrders).map(orderBrief),
+      pendingAdm: take(pendingAdm).map(admBrief),
+      lowStock: take(lowStock).map(medBrief)
+    },
+    counts: {
+      myPendingRegs: myRegs.length,
+      myPendingReports: myReports.length,
+      pendingCharge: pendingCharge.length,
+      pendingDispense: pendingDispense.length,
+      pendingSettle: pendingSettle.length,
+      pendingOrders: pendingOrders.length,
+      pendingAdm: pendingAdm.length,
+      lowStock: lowStock.length
+    },
+    generatedAt: now()
+  }
+}
+
+// =====================================================================
+// B2：患者 360° 全流程时间线（只读聚合，不修改业务数据）
+// =====================================================================
+function timelineProgress(events) {
+  const total = events.length
+  const done = events.filter(function (e) { return e.statusKind === 'done' }).length
+  const pending = events.filter(function (e) { return e.statusKind === 'pending' || e.statusKind === 'progress' }).length
+  let stage = '全部完成'
+  for (let i = events.length - 1; i >= 0; i--) {
+    const e = events[i]
+    if (e.statusKind === 'pending' || e.statusKind === 'progress') {
+      stage = e.category + '·' + (e.status || '进行中')
+      break
+    }
+  }
+  return { stage: stage, total: total, done: done, pending: pending }
+}
+
+function patientTimeline(patientId) {
+  requireState()
+  const patient = find('patients', patientId)
+  if (!patient) return fail('患者不存在')
+  const dmap = byIdMap('departments')
+  const smap = byIdMap('staff')
+  const wmap = byIdMap('wards')
+  const bmap = byIdMap('beds')
+  const events = []
+  function dname(id) { return (dmap[id] || {}).name || '' }
+  function sname(id) { return (smap[id] || {}).name || '' }
+  function push(ev) { events.push(ev) }
+
+  all('registrations').filter(function (r) { return r.patientId === patientId }).forEach(function (r) {
+    push({ id: 'reg:' + r.id, category: '挂号', time: r.createdAt || '', title: '门诊挂号', summary: dname(r.departmentId) + ' ' + sname(r.doctorId) + ' ' + (r.period || ''), status: r.regStatus, statusKind: r.regStatus === '已完成' ? 'done' : (r.regStatus === '已退号' ? 'cancelled' : 'pending'), departmentName: dname(r.departmentId), role: '挂号', refType: 'registration', refId: r.id, link: '/outpatient/registrations' })
+  })
+
+  all('visits').filter(function (v) { return v.patientId === patientId }).forEach(function (v) {
+    push({ id: 'visit:' + v.id, category: '接诊', time: v.createdAt || '', title: '门诊接诊', summary: v.diagnosis || v.complaint || '', status: v.visitStatus, statusKind: v.visitStatus === '已完成' ? 'done' : 'progress', departmentName: dname(v.departmentId), role: '医生', refType: 'visit', refId: v.id, link: '/outpatient/visits' })
+    if ((v.prescriptions || []).length) {
+      push({ id: 'rx:' + v.id, category: '处方', time: v.createdAt || '', title: '处方开具', summary: (v.prescriptions || []).map(function (x) { return x.medicineName + '×' + x.qty }).join('、'), status: v.dispenseStatus, statusKind: v.dispenseStatus === '已发药' ? 'done' : 'pending', departmentName: dname(v.departmentId), role: '医生', refType: 'visit', refId: v.id, link: '/outpatient/prescriptions' })
+    }
+    if ((v.exams || []).length) {
+      push({ id: 'exam:' + v.id, category: '检查', time: v.createdAt || '', title: '医技申请', summary: (v.exams || []).map(function (x) { return x.examItemName + '×' + x.qty }).join('、'), status: v.reportStatus, statusKind: v.reportStatus === '已出报告' ? 'done' : 'pending', departmentName: dname(v.departmentId), role: '医生', refType: 'visit', refId: v.id, link: '/outpatient/exam-applies' })
+    }
+    if (v.chargeStatus === '已收费') {
+      const fr = all('feeRecords').find(function (f) { return f.refId === v.id && f.type === '门诊收费' })
+      push({ id: 'charge:' + v.id, category: '收费', time: fr ? fr.paidAt : '', title: '门诊收费', summary: '收费金额 ' + (fr ? (fr.amountCents / 100).toFixed(2) : '0.00') + ' 元', status: '已收费', statusKind: 'done', departmentName: '', role: '收费员', refType: 'visit', refId: v.id, link: '/outpatient/charges' })
+    }
+    (v.reports || []).forEach(function (rep, i) {
+      push({ id: 'report:' + v.id + ':' + i, category: '检查报告', time: rep.at || '', title: '检查报告：' + rep.examItemName, summary: rep.content || '', status: '已出报告', statusKind: 'done', departmentName: '', role: '医技', refType: 'visit', refId: v.id, link: '/outpatient/reports' })
+    })
+  })
+
+  all('admissions').filter(function (a) { return a.patientId === patientId }).forEach(function (a) {
+    const wardName = (wmap[a.wardId] || {}).name || ''
+    const bedCode = (bmap[a.bedId] || {}).code || ''
+    push({ id: 'adm:' + a.id, category: '入院', time: a.admitAt || '', title: '入院登记', summary: dname(a.departmentId) + ' ' + wardName + ' ' + bedCode, status: a.status, statusKind: a.status === '已出院' ? 'done' : (a.status === '已取消' ? 'cancelled' : 'progress'), departmentName: dname(a.departmentId), role: '住院', refType: 'admission', refId: a.id, link: '/inpatient/admissions' })
+    if (a.confirmAt) {
+      push({ id: 'adm-confirm:' + a.id, category: '入院', time: a.confirmAt, title: '入科确认', summary: '患者入科', status: '在院', statusKind: 'progress', departmentName: dname(a.departmentId), role: '护士', refType: 'admission', refId: a.id, link: '/inpatient/admissions' })
+    }
+    all('orders').filter(function (o) { return o.admissionId === a.id }).forEach(function (o) {
+      push({ id: 'order:' + o.id, category: '医嘱', time: o.createdAt || '', title: '住院医嘱', summary: o.name + '×' + o.qty, status: o.status, statusKind: o.status === '已执行' ? 'done' : 'pending', departmentName: '', role: '医生', refType: 'order', refId: o.id, link: '/inpatient/orders' })
+    })
+    all('settlements').filter(function (st) { return st.admissionId === a.id }).forEach(function (st) {
+      push({ id: 'settle:' + st.id, category: '出院结算', time: st.settledAt || '', title: '出院结算', summary: '总额 ' + (st.totalCents / 100).toFixed(2) + ' 元，差额 ' + (st.balanceCents / 100).toFixed(2) + ' 元', status: st.status, statusKind: 'done', departmentName: '', role: '收费员', refType: 'settlement', refId: st.id, link: '/inpatient/settlements' })
+    })
+    all('auditEvents').filter(function (e) { return e.entityType === 'admissions' && e.entityId === a.id && ['转科转床', '取消登记', '申请出院'].indexOf(e.action) !== -1 }).forEach(function (e) {
+      push({ id: 'audit:' + e.id, category: '住院', time: e.time || '', title: e.action, summary: e.summary || '', status: '已记录', statusKind: 'info', departmentName: '', role: e.actorRole || '', refType: 'admission', refId: a.id, link: '/inpatient/admissions' })
+    })
+  })
+
+  events.sort(function (x, y) {
+    if (!x.time) return 1
+    if (!y.time) return -1
+    return x.time < y.time ? -1 : x.time > y.time ? 1 : 0
+  })
+  return ok({ patient: { id: patient.id, code: patient.code, name: patient.name, gender: patient.gender, phone: patient.phone, allergy: patient.allergy }, events: events, progress: timelineProgress(events), generatedAt: now() })
+}
+
+// =====================================================================
 module.exports = {
   STORAGE_KEY,
   CURRENT_VERSION,
@@ -1529,5 +2223,98 @@ module.exports = {
   clearLogs,
   saveRoleMenu,
   createRole,
-  deleteRole
+  deleteRole,
+
+  // === B1 新增：身份/角色、审计、待办、提醒 ===
+  profileOf,
+  permissionsOf,
+  setCurrentActor,
+  getCurrentActor,
+  setActorByToken,
+  recordAudit,
+  queryAudit,
+  createTodo,
+  updateTodo,
+  setTodoStatus,
+  deleteTodo,
+  suggestTodoPriority,
+  computeReminders,
+  reminderSummary,
+  acknowledgeReminder,
+  snoozeReminder,
+  REMINDER_RULES,
+
+  // === B2 新增：权限域、工作台聚合、患者时间线 ===
+  canDomain,
+  canMenu,
+  workbenchSummary,
+  patientTimeline,
+
+  // === B3 新增：AI 审计事件（只读集合，AI 层唯一写入口） ===
+  recordAiEvent,
+  queryAiEvents,
+  markAiEventAccepted,
+  aiEventStats
 }
+
+// =====================================================================
+// B1：为所有写操作自动记录结构化审计（真实操作人 + 实体 + 前后摘要）
+// 说明：不改变业务函数签名与校验逻辑，仅在成功后追加一条 auditEvent。
+// =====================================================================
+function collectBefore(entity, id) {
+  if (!entity || typeof id !== 'string') return null
+  const row = find(entity, id)
+  return row ? summarizeEntity(row) : null
+}
+
+const AUDIT_WRAP = [
+  ['createStaff', '新增员工', 'staff', false], ['updateStaff', '修改员工', 'staff', true], ['setStaffEnabled', '启停账号', 'staff', true], ['resetStaffPassword', '重置密码', 'staff', true], ['deleteStaff', '删除员工', 'staff', true],
+  ['createDepartment', '新增科室', 'departments', false], ['updateDepartment', '修改科室', 'departments', true], ['deleteDepartment', '删除科室', 'departments', true],
+  ['createWard', '新增病区', 'wards', false], ['updateWard', '修改病区', 'wards', true], ['deleteWard', '删除病区', 'wards', true],
+  ['createBed', '新增床位', 'beds', false], ['updateBed', '修改床位', 'beds', true], ['deleteBed', '删除床位', 'beds', true],
+  ['createPatient', '新增患者', 'patients', false], ['updatePatient', '修改患者', 'patients', true], ['deletePatient', '删除患者', 'patients', true],
+  ['createSchedule', '新增排班', 'schedules', false], ['updateSchedule', '修改排班', 'schedules', true], ['deleteSchedule', '删除排班', 'schedules', true],
+  ['createRegistration', '挂号', 'registrations', false], ['refundRegistration', '退号', 'registrations', true],
+  ['createVisit', '接诊', 'visits', false], ['updateVisit', '修改接诊', 'visits', true],
+  ['createMedicine', '新增药品', 'medicines', false], ['updateMedicine', '修改药品', 'medicines', true], ['deleteMedicine', '删除药品', 'medicines', true],
+  ['createExamItem', '新增医技项目', 'examItems', false], ['updateExamItem', '修改医技项目', 'examItems', true], ['deleteExamItem', '删除医技项目', 'examItems', true],
+  ['createFeeItem', '新增收费项目', 'feeItems', false], ['updateFeeItem', '修改收费项目', 'feeItems', true], ['deleteFeeItem', '删除收费项目', 'feeItems', true],
+  ['createStock', '新增批次库存', 'stocks', false], ['updateStock', '修改批次库存', 'stocks', true], ['deleteStock', '删除批次库存', 'stocks', true],
+  ['createAdmission', '入院登记', 'admissions', false], ['updateAdmissionDeposit', '修改预交金', 'admissions', true],
+  ['confirmAdmission', '入科确认', 'admissions', true], ['transferAdmission', '转科转床', 'admissions', true],
+  ['cancelAdmission', '取消登记', 'admissions', true], ['requestDischarge', '申请出院', 'admissions', true], ['settleDischarge', '出院结算', 'admissions', true],
+  ['createOrder', '开立医嘱', 'orders', false], ['executeOrder', '执行医嘱', 'orders', true], ['cancelOrder', '作废医嘱', 'orders', true],
+  ['chargeVisit', '门诊收费', 'visits', true], ['dispenseVisit', '处方发药', 'visits', true], ['createReport', '出具报告', 'visits', true],
+  ['saveRoleMenu', '修改角色权限', 'roles', true], ['createRole', '新增角色', 'roles', false], ['deleteRole', '删除角色', 'roles', true],
+  ['resetAll', '重置演示数据', 'system', false],
+  ['login', '登录系统', 'staff', false]
+]
+
+AUDIT_WRAP.forEach(function (cfg) {
+  const name = cfg[0], action = cfg[1], entity = cfg[2], byId = cfg[3]
+  const orig = module.exports[name]
+  if (typeof orig !== 'function') return
+  module.exports[name] = function () {
+    const args = Array.prototype.slice.call(arguments)
+    const before = byId ? collectBefore(entity, args[0]) : null
+    const res = orig.apply(null, args)
+    try {
+      if (res && res.ok) {
+        const data = res.data
+        const id = (data && (data.id || (data.staff && data.staff.id))) || (typeof args[0] === 'string' ? args[0] : '')
+        recordAudit(currentActor, action, {
+          entityType: entity,
+          entityId: id,
+          entityCode: (data && data.code) || '',
+          summary: action + (data && data.code ? ' ' + data.code : id ? ' ' + id : ''),
+          before: before,
+          after: summarizeEntity(data)
+        })
+        persist()
+      }
+    } catch (e) {
+      /* 审计失败不影响业务结果 */
+    }
+    return res
+  }
+})

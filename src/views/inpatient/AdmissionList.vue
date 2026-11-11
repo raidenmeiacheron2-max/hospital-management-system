@@ -61,9 +61,10 @@
             <StatusTag :label="row.status" />
           </template>
         </el-table-column>
-        <el-table-column label="操作" width="190" fixed="right">
+        <el-table-column label="操作" width="240" fixed="right">
           <template slot-scope="{ row }">
             <div class="operation-links">
+              <el-link type="primary" @click="goTimeline(row)">时间线</el-link>
               <el-link type="primary" @click="openDetail(row)">详情</el-link>
               <el-link v-if="row.status === '待入科'" type="primary" @click="confirmRow(row)">入科</el-link>
               <el-link v-if="['待入科', '在院', '待结算'].includes(row.status)" type="primary" @click="openTransfer(row)">转床</el-link>
@@ -387,6 +388,9 @@ export default {
     },
     goSettle() {
       this.$router.push('/inpatient/settlements')
+    },
+    goTimeline(row) {
+      this.$router.push('/patients/timeline?patientId=' + row.patientId)
     },
     openDetail(row) {
       this.detailRow = row

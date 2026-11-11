@@ -32,6 +32,12 @@ export const STATUS_COLOR = {
   已退费: 'gray',
   已取消: 'gray',
   已出院: 'gray',
+  未完成: 'orange',
+  处理中: 'blue',
+  已读: 'gray',
+  高: 'red',
+  中: 'orange',
+  低: 'gray',
   '—': 'gray'
 }
 

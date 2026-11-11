@@ -40,6 +40,13 @@ tools/debug-out.log
 tools/__pycache__/
 tools/ocr/
 
+# ===== 验收临时产物（日志不入库；报告/截图/导出样本保留）=====
+acceptance/logs/
+acceptance/scripts/debug-login.js
+
+# ===== 本机权限恢复产物（仅本机，不入库）=====
+dsh-acl-recovery/
+
 # ===== 第三方参考素材（版权原因不随仓库发布，仅本地保留）=====
 SpringBoot+Vue医院业务管理系统_*.jpg
 医院管理系统_Astra分阶段开发指导手册.docx
