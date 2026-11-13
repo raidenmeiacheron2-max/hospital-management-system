@@ -158,6 +158,7 @@ tools/             开发辅助（DOCX 提取、截图 OCR、配色分析、chec
 
 ## 交接与后续开发
 
+- **当前功能说明：[docs/FEATURE_GUIDE.md](docs/FEATURE_GUIDE.md)** —— 系统定位、演示账号、角色权限、模块功能、智能能力、业务流程、创新点完成度、测试结果与当前限制。
 - **面向接手方（人或 AI 代理）的完整交接文档：[docs/HANDOVER.md](docs/HANDOVER.md)** —— 架构分层、数据模型与字段、业务状态机、Mock/API 约定、路由与组件、测试体系、扩展步骤（新增实体 7 步 / 新增 AI 任务 6 步）、环境坑与已知限制、验收清单。
 - **B3–B5 最终交付报告：[docs/B3-B5_DELIVERY_REPORT.md](docs/B3-B5_DELIVERY_REPORT.md)** —— 新增功能、架构与安全设计、文件变更、测试与验证结果、验收对照、遗留问题与复现步骤。
 - 九图逐页对照：[docs/checklist.md](docs/checklist.md)；视觉验收方法：[docs/visual-check.md](docs/visual-check.md)。
